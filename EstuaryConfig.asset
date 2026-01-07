@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cd6b71dcdf1be40ab971dd203e96b9c2, type: 3}
+  m_Name: EstuaryConfig
+  m_EditorClassIdentifier: Estuary::Estuary.EstuaryConfig
+  serverUrl: ws://localhost:4001
+  apiKey: est_3y3FOQ3ij_4UN8g8-S2UvQp9NTdbVNctlJSdjtL9UC0
+  characterId: 
+  playerId: 
+  recordingSampleRate: 16000
+  playbackSampleRate: 24000
+  audioChunkDurationMs: 100
+  autoReconnect: 1
+  maxReconnectAttempts: 5
+  reconnectDelayMs: 2000
+  debugLogging: 0

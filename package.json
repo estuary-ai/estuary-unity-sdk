@@ -1,0 +1,43 @@
+{
+  "name": "com.estuary.sdk",
+  "version": "1.0.0",
+  "displayName": "Estuary SDK",
+  "description": "Unity SDK for integrating Estuary AI characters with voice and text chat capabilities into Unity games.",
+  "unity": "2021.3",
+  "unityRelease": "0f1",
+  "documentationUrl": "https://docs.estuary-ai.com/unity-sdk",
+  "changelogUrl": "https://github.com/estuary-ai/estuary-unity-sdk/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/estuary-ai/estuary-unity-sdk/blob/main/LICENSE",
+  "keywords": [
+    "ai",
+    "npc",
+    "voice",
+    "chat",
+    "character",
+    "conversational-ai",
+    "text-to-speech",
+    "speech-to-text"
+  ],
+  "author": {
+    "name": "Estuary AI",
+    "email": "support@estuary-ai.com",
+    "url": "https://estuary-ai.com"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "io.livekit.livekit-sdk": "https://github.com/livekit/client-sdk-unity.git"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Chat",
+      "description": "A simple example demonstrating text and voice chat with an AI character.",
+      "path": "Samples~/BasicChat"
+    }
+  ]
+}
+
+
+
+
+
+

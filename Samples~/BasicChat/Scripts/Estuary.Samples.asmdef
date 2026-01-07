@@ -1,0 +1,22 @@
+{
+    "name": "Estuary.Samples",
+    "rootNamespace": "Estuary.Samples",
+    "references": [
+        "Estuary"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
+
+
+
+
+
+

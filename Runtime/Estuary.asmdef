@@ -1,0 +1,28 @@
+{
+    "name": "Estuary",
+    "rootNamespace": "Estuary",
+    "references": [
+        "LiveKit"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "io.livekit.livekit-sdk",
+            "expression": "",
+            "define": "LIVEKIT_AVAILABLE"
+        }
+    ],
+    "noEngineReferences": false
+}
+
+
+
+
+
+
