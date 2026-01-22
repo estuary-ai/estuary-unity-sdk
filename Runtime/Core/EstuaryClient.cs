@@ -82,6 +82,21 @@ namespace Estuary
         /// </summary>
         public event EstuaryEvents.LiveKitErrorHandler OnLiveKitError;
 
+        /// <summary>
+        /// Fired when the API key owner has exceeded their monthly interaction quota.
+        /// </summary>
+        public event EstuaryEvents.QuotaExceededHandler OnQuotaExceeded;
+
+        /// <summary>
+        /// Fired when a scene graph update is received from the world model.
+        /// </summary>
+        public event EstuaryEvents.SceneGraphUpdateHandler OnSceneGraphUpdate;
+
+        /// <summary>
+        /// Fired when a room is identified by the world model.
+        /// </summary>
+        public event EstuaryEvents.RoomIdentifiedHandler OnRoomIdentified;
+
         #endregion
 
         #region Properties
@@ -295,6 +310,68 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Emit a custom event to the server.
+        /// Used by world model components to send video frames, poses, etc.
+        /// </summary>
+        /// <param name="eventName">Event name</param>
+        /// <param name="data">Event data (must be serializable)</param>
+        public async Task EmitAsync(string eventName, object data)
+        {
+            if (!IsConnected)
+            {
+                LogError($"Cannot emit {eventName}: not connected");
+                return;
+            }
+
+            await _socket.EmitAsync(eventName, data);
+            Log($"Emitted {eventName}");
+        }
+
+        /// <summary>
+        /// Enable LiveKit video streaming for world model.
+        /// When enabled, video frames sent via LiveKit will be forwarded to the world model.
+        /// </summary>
+        /// <param name="sessionId">World model session ID</param>
+        /// <param name="targetFps">Target FPS for video processing (default 10)</param>
+        public async Task EnableLiveKitVideoAsync(string sessionId, int targetFps = 10)
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot enable LiveKit video: not connected");
+                return;
+            }
+
+            var payload = new EnableLiveKitVideoPayload
+            {
+                sessionId = sessionId,
+                targetFps = targetFps
+            };
+            await _socket.EmitAsync("enable_livekit_video", payload);
+            Log($"Enabled LiveKit video for session {sessionId}");
+        }
+
+        /// <summary>
+        /// Disable LiveKit video streaming for world model.
+        /// </summary>
+        public async Task DisableLiveKitVideoAsync()
+        {
+            if (!IsConnected)
+            {
+                return;
+            }
+
+            await _socket.EmitAsync("disable_livekit_video", null);
+            Log("Disabled LiveKit video");
+        }
+
+        [Serializable]
+        private class EnableLiveKitVideoPayload
+        {
+            public string sessionId;
+            public int targetFps;
+        }
+
+        /// <summary>
         /// Process queued events on the main thread. Call this from Update().
         /// </summary>
         public void ProcessMainThreadQueue()
@@ -342,6 +419,13 @@ namespace Estuary
                 _socket.On("livekit_token", HandleLiveKitToken);
                 _socket.On("livekit_ready", HandleLiveKitReady);
                 _socket.On("livekit_error", HandleLiveKitError);
+
+                // Quota event handler
+                _socket.On("quota_exceeded", HandleQuotaExceeded);
+
+                // World model event handlers
+                _socket.On("scene_graph_update", HandleSceneGraphUpdate);
+                _socket.On("room_identified", HandleRoomIdentified);
 
                 // Connect WITH auth - Socket.IO v4 passes auth in the namespace connect message
                 var auth = new AuthenticateData
@@ -645,6 +729,70 @@ namespace Estuary
             catch (Exception e)
             {
                 LogError($"Failed to parse livekit_error: {e.Message}");
+            }
+        }
+
+        private void HandleQuotaExceeded(string json)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(json))
+                {
+                    LogError("Received empty quota_exceeded response");
+                    return;
+                }
+
+                var data = QuotaExceededData.FromJson(json);
+                LogError($"Quota exceeded: {data}");
+                
+                // Quota exceeded typically means the connection will be terminated
+                SetState(ConnectionState.Error);
+                
+                DispatchToMainThread(() => OnQuotaExceeded?.Invoke(data));
+                DispatchToMainThread(() => OnError?.Invoke(data.Message));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse quota_exceeded: {e.Message}");
+                DispatchToMainThread(() => OnError?.Invoke("Quota exceeded"));
+            }
+        }
+
+        private void HandleSceneGraphUpdate(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return;
+            }
+
+            try
+            {
+                var update = SceneGraphUpdate.FromJson(json);
+                Log($"Received scene graph update: {update.SceneGraph?.EntityCount ?? 0} entities");
+                DispatchToMainThread(() => OnSceneGraphUpdate?.Invoke(update));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse scene_graph_update: {e.Message}");
+            }
+        }
+
+        private void HandleRoomIdentified(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return;
+            }
+
+            try
+            {
+                var room = RoomIdentified.FromJson(json);
+                Log($"Room identified: {room.RoomName} ({room.Status})");
+                DispatchToMainThread(() => OnRoomIdentified?.Invoke(room));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse room_identified: {e.Message}");
             }
         }
 

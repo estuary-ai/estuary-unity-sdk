@@ -54,6 +54,26 @@ namespace Estuary
         /// </summary>
         public delegate void ActionReceivedHandler(AgentAction action);
 
+        /// <summary>
+        /// Delegate for quota exceeded events.
+        /// Fired when the API key owner has exceeded their monthly interaction quota.
+        /// </summary>
+        public delegate void QuotaExceededHandler(QuotaExceededData data);
+
+        #region World Model Events
+
+        /// <summary>
+        /// Delegate for scene graph update events from the world model.
+        /// </summary>
+        public delegate void SceneGraphUpdateHandler(SceneGraphUpdate update);
+
+        /// <summary>
+        /// Delegate for room identified events from the world model.
+        /// </summary>
+        public delegate void RoomIdentifiedHandler(RoomIdentified room);
+
+        #endregion
+
         #region LiveKit Events
 
         /// <summary>
