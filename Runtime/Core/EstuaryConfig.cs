@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace Estuary
@@ -21,8 +22,11 @@ namespace Estuary
     }
 
     /// <summary>
-    /// ScriptableObject for storing Estuary SDK configuration.
+    /// ScriptableObject for storing global Estuary SDK configuration.
     /// Create via Assets > Create > Estuary > Config.
+    /// 
+    /// Note: Character-specific settings (characterId, playerId) should be set
+    /// on the EstuaryCharacter component, not here.
     /// </summary>
     [CreateAssetMenu(fileName = "EstuaryConfig", menuName = "Estuary/Config", order = 1)]
     public class EstuaryConfig : ScriptableObject
@@ -31,21 +35,12 @@ namespace Estuary
 
         [Header("Server Settings")]
         [SerializeField]
-        [Tooltip("Estuary server URL (e.g., https://api.estuary-ai.com)")]
+        [Tooltip("Estuary server URL (e.g., https://api.estuary-ai.com). ws:// and wss:// are allowed and normalized.")]
         private string serverUrl = "https://api.estuary-ai.com";
 
         [SerializeField]
         [Tooltip("Your Estuary API key. Get one at app.estuary-ai.com")]
         private string apiKey = "";
-
-        [Header("Character Settings")]
-        [SerializeField]
-        [Tooltip("The UUID of the character to connect to (get this from your Estuary dashboard)")]
-        private string characterId = "";
-
-        [SerializeField]
-        [Tooltip("Unique identifier for the player (used for conversation persistence)")]
-        private string playerId = "";
 
         [Header("Voice Settings")]
         [SerializeField]
@@ -68,19 +63,6 @@ namespace Estuary
         [SerializeField]
         [Tooltip("Duration of audio chunks to send (in milliseconds)")]
         private int audioChunkDurationMs = 100;
-
-        [Header("Connection Settings")]
-        [SerializeField]
-        [Tooltip("Automatically reconnect if connection is lost")]
-        private bool autoReconnect = true;
-
-        [SerializeField]
-        [Tooltip("Maximum number of reconnection attempts")]
-        private int maxReconnectAttempts = 5;
-
-        [SerializeField]
-        [Tooltip("Delay between reconnection attempts (in milliseconds)")]
-        private int reconnectDelayMs = 2000;
 
         [Header("Debug")]
         [SerializeField]
@@ -107,24 +89,6 @@ namespace Estuary
         {
             get => apiKey;
             set => apiKey = value;
-        }
-
-        /// <summary>
-        /// The character UUID to connect to.
-        /// </summary>
-        public string CharacterId
-        {
-            get => characterId;
-            set => characterId = value;
-        }
-
-        /// <summary>
-        /// Unique player identifier for conversation persistence.
-        /// </summary>
-        public string PlayerId
-        {
-            get => playerId;
-            set => playerId = value;
         }
 
         /// <summary>
@@ -167,21 +131,6 @@ namespace Estuary
         public int AudioChunkDurationMs => audioChunkDurationMs;
 
         /// <summary>
-        /// Whether to automatically reconnect.
-        /// </summary>
-        public bool AutoReconnect => autoReconnect;
-
-        /// <summary>
-        /// Maximum reconnection attempts.
-        /// </summary>
-        public int MaxReconnectAttempts => maxReconnectAttempts;
-
-        /// <summary>
-        /// Delay between reconnection attempts.
-        /// </summary>
-        public int ReconnectDelayMs => reconnectDelayMs;
-
-        /// <summary>
         /// Enable debug logging.
         /// </summary>
         public bool DebugLogging
@@ -199,25 +148,13 @@ namespace Estuary
             // Validate server URL
             if (!string.IsNullOrEmpty(serverUrl))
             {
-                if (!serverUrl.StartsWith("http://") && !serverUrl.StartsWith("https://"))
-                {
-                    Debug.LogWarning("[EstuaryConfig] Server URL should start with http:// or https://");
-                }
-
-                // Remove trailing slash
-                serverUrl = serverUrl.TrimEnd('/');
+                serverUrl = NormalizeServerUrl(serverUrl, logWarnings: true);
             }
 
             // Validate API key
             if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("est_"))
             {
                 Debug.LogWarning("[EstuaryConfig] API key should start with 'est_'");
-            }
-
-            // Validate character ID (should be a UUID)
-            if (!string.IsNullOrEmpty(characterId) && characterId.Length != 36)
-            {
-                Debug.LogWarning("[EstuaryConfig] Character ID should be a UUID (36 characters)");
             }
 
             // Validate sample rates
@@ -239,7 +176,7 @@ namespace Estuary
 
         #endregion
 
-        #region Runtime API Key Setting
+        #region Runtime Settings
 
         /// <summary>
         /// Set the API key at runtime (for builds where you don't want to store the key in the asset).
@@ -261,7 +198,7 @@ namespace Estuary
         /// <param name="url">The server URL to use</param>
         public void SetServerUrlRuntime(string url)
         {
-            serverUrl = url?.TrimEnd('/') ?? "";
+            serverUrl = NormalizeServerUrl(url, logWarnings: debugLogging);
 
             if (debugLogging)
             {
@@ -271,22 +208,64 @@ namespace Estuary
 
         #endregion
 
+        #region Helpers
+
+        private static string NormalizeServerUrl(string url, bool logWarnings)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return "";
+            }
+
+            var trimmed = url.Trim();
+
+            if (trimmed.StartsWith("ws://", StringComparison.OrdinalIgnoreCase))
+            {
+                if (logWarnings)
+                {
+                    Debug.LogWarning("[EstuaryConfig] ws:// is normalized to http:// for Socket.IO");
+                }
+                trimmed = "http://" + trimmed.Substring("ws://".Length);
+            }
+            else if (trimmed.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+            {
+                if (logWarnings)
+                {
+                    Debug.LogWarning("[EstuaryConfig] wss:// is normalized to https:// for Socket.IO");
+                }
+                trimmed = "https://" + trimmed.Substring("wss://".Length);
+            }
+
+            if (!trimmed.StartsWith("http://") && !trimmed.StartsWith("https://"))
+            {
+                if (logWarnings)
+                {
+                    Debug.LogWarning("[EstuaryConfig] Server URL should start with http:// or https://");
+                }
+            }
+
+            // Remove trailing slash
+            return trimmed.TrimEnd('/');
+        }
+
+        #endregion
+
         #region Validation Methods
 
         /// <summary>
         /// Check if the configuration is valid for connecting.
+        /// Note: Character-specific validation (characterId, playerId) should be done on EstuaryCharacter.
         /// </summary>
-        /// <returns>True if configuration is valid</returns>
+        /// <returns>True if global configuration is valid</returns>
         public bool IsValid()
         {
             return !string.IsNullOrEmpty(serverUrl) 
-                && !string.IsNullOrEmpty(apiKey)
-                && !string.IsNullOrEmpty(characterId)
-                && !string.IsNullOrEmpty(playerId);
+                && !string.IsNullOrEmpty(apiKey);
         }
 
         /// <summary>
         /// Get validation errors (if any).
+        /// Note: Character-specific validation (characterId, playerId) should be done on EstuaryCharacter.
         /// </summary>
         /// <returns>Error message, or null if valid</returns>
         public string GetValidationError()
@@ -299,16 +278,6 @@ namespace Estuary
             if (string.IsNullOrEmpty(apiKey))
             {
                 return "API key is not set";
-            }
-
-            if (string.IsNullOrEmpty(characterId))
-            {
-                return "Character ID is not set";
-            }
-
-            if (string.IsNullOrEmpty(playerId))
-            {
-                return "Player ID is not set";
             }
 
             return null;

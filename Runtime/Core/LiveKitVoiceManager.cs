@@ -49,8 +49,12 @@ namespace Estuary
         /// <summary>
         /// Fired when audio data is received from a remote participant (bot TTS).
         /// Parameters: PCM audio bytes, sample rate, channels
+        /// Note: Currently unused as LiveKit handles audio playback automatically.
+        /// Reserved for future custom audio processing.
         /// </summary>
+#pragma warning disable CS0067 // Event is never used
         public event Action<byte[], int, int> OnAudioReceived;
+#pragma warning restore CS0067
 
         /// <summary>
         /// Fired when a remote participant connects.

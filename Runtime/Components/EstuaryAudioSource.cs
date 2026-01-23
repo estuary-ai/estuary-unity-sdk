@@ -122,7 +122,6 @@ namespace Estuary
         private Coroutine _liveKitPlaybackCoroutine;
         private AudioClip _liveKitStreamClip;
         private float[] _liveKitBuffer;
-        private int _liveKitBufferPosition;
         private readonly object _liveKitLock = new object();
 
         // LiveKit streaming buffer
@@ -431,7 +430,6 @@ namespace Estuary
             // Create a streaming buffer for LiveKit audio
             var bufferSize = _liveKitSampleRate * LIVEKIT_BUFFER_SECONDS;
             _liveKitBuffer = new float[bufferSize];
-            _liveKitBufferPosition = 0;
 
             lock (_liveKitLock)
             {
@@ -454,7 +452,6 @@ namespace Estuary
             }
 
             _liveKitBuffer = null;
-            _liveKitBufferPosition = 0;
 
             lock (_liveKitLock)
             {
@@ -601,39 +598,74 @@ namespace Estuary
         {
             _isProcessingQueue = true;
             var isFirstClip = true;
+            var emptyQueueWaitTime = 0f;
+            const float maxEmptyQueueWait = 2.0f; // Wait up to 2 seconds for more chunks
 
-            while (_audioQueue.Count > 0)
+            while (true)
             {
-                var item = _audioQueue.Dequeue();
-
-                if (item.Clip == null)
-                    continue;
-
-                // Update current message ID
-                _currentlyPlayingMessageId = item.MessageId;
-                CurrentMessageId = item.MessageId;
-
-                // Fire started event on first clip
-                if (isFirstClip)
+                if (_audioQueue.Count > 0)
                 {
-                    isFirstClip = false;
-                    OnPlaybackStarted?.Invoke();
-                    onPlaybackStarted?.Invoke();
-                    Debug.Log($"[EstuaryAudioSource] Started playing message {item.MessageId}");
+                    // Reset wait timer when we have audio
+                    emptyQueueWaitTime = 0f;
+                    
+                    var item = _audioQueue.Dequeue();
+
+                    if (item.Clip == null)
+                        continue;
+
+                    // Update current message ID
+                    _currentlyPlayingMessageId = item.MessageId;
+                    CurrentMessageId = item.MessageId;
+
+                    // Fire started event on first clip
+                    if (isFirstClip)
+                    {
+                        isFirstClip = false;
+                        OnPlaybackStarted?.Invoke();
+                        onPlaybackStarted?.Invoke();
+                        Debug.Log($"[EstuaryAudioSource] Started playing message {item.MessageId}");
+                    }
+
+                    // Play the clip
+                    audioSource.clip = item.Clip;
+                    audioSource.Play();
+
+                    // Wait for clip to finish
+                    while (audioSource.isPlaying)
+                    {
+                        yield return null;
+                    }
+
+                    // Cleanup
+                    Destroy(item.Clip);
                 }
-
-                // Play the clip
-                audioSource.clip = item.Clip;
-                audioSource.Play();
-
-                // Wait for clip to finish
-                while (audioSource.isPlaying)
+                else
                 {
-                    yield return null;
-                }
+                    // Queue is empty - wait a bit for more chunks to arrive
+                    if (!isFirstClip) // Only wait if we've started playing
+                    {
+                        yield return new WaitForSeconds(0.05f);
+                        emptyQueueWaitTime += 0.05f;
 
-                // Cleanup
-                Destroy(item.Clip);
+                        // If we've waited too long with no new audio, consider playback complete
+                        if (emptyQueueWaitTime >= maxEmptyQueueWait)
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // Haven't started yet, just wait briefly
+                        yield return new WaitForSeconds(0.01f);
+                        emptyQueueWaitTime += 0.01f;
+                        
+                        if (emptyQueueWaitTime >= 0.5f)
+                        {
+                            // No audio received for 500ms, exit
+                            break;
+                        }
+                    }
+                }
             }
 
             // All clips played
@@ -641,14 +673,17 @@ namespace Estuary
             _currentlyPlayingMessageId = null;
             _playbackCoroutine = null;
 
-            // Fire complete event
-            OnPlaybackComplete?.Invoke();
-            onPlaybackComplete?.Invoke();
+            // Fire complete event only if we actually played something
+            if (!isFirstClip)
+            {
+                OnPlaybackComplete?.Invoke();
+                onPlaybackComplete?.Invoke();
 
-            Debug.Log("[EstuaryAudioSource] Playback complete");
+                Debug.Log("[EstuaryAudioSource] Playback complete");
 
-            // Notify server that playback is complete
-            NotifyPlaybackComplete();
+                // Notify server that playback is complete
+                NotifyPlaybackComplete();
+            }
         }
 
         private async void NotifyPlaybackComplete()

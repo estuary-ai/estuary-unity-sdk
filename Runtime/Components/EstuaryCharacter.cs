@@ -207,7 +207,7 @@ namespace Estuary
         {
             if (EstuaryManager.HasInstance)
             {
-                EstuaryManager.Instance.UnregisterCharacter(this);
+                EstuaryManager.Instance?.UnregisterCharacter(this);
             }
         }
 

@@ -86,6 +86,7 @@ namespace Estuary
 
 #if LIVEKIT_AVAILABLE
         private Room _room;
+        private LocalVideoTrack _localVideoTrack;
 #endif
         private WebcamVideoSource _webcamSource;
         private bool _disposed;
@@ -173,22 +174,52 @@ namespace Estuary
 #if LIVEKIT_AVAILABLE
         private IEnumerator StartPublishingCoroutine()
         {
-            // Use LiveKit's built-in camera enablement
-            Log("Enabling camera via LiveKit...");
-            
-            var enableInstruction = _room.LocalParticipant.SetCameraEnabled(true);
-            yield return enableInstruction;
+            Log("Starting video track publishing...");
 
-            if (enableInstruction.IsError)
+            // Note: Video publishing requires creating a video source that implements LiveKit's
+            // RtcVideoSource interface. This is more complex than audio since LiveKit's Unity SDK
+            // doesn't provide a simple built-in camera source like SetCameraEnabled().
+            // 
+            // For now, we create a webcam source for local preview/processing,
+            // but full LiveKit video track publishing would require implementing
+            // a custom RtcVideoSource or using LiveKit's native camera capture if available.
+
+            // Create webcam video source for local capture/preview
+            _webcamSource = new WebcamVideoSource(
+                _coroutineRunner,
+                deviceName: string.IsNullOrEmpty(PreferredDevice) ? null : PreferredDevice,
+                useFrontCamera: UseFrontCamera,
+                width: TargetWidth,
+                height: TargetHeight,
+                fps: TargetFps
+            );
+
+            // Start webcam capture
+            _webcamSource.Start();
+
+            // Wait a frame for webcam to initialize
+            yield return null;
+
+            if (!_webcamSource.IsCapturing)
             {
-                LogError("Failed to enable camera via LiveKit");
+                LogError("Failed to start webcam capture");
+                _webcamSource?.Stop();
+                _webcamSource?.Dispose();
+                _webcamSource = null;
                 _publishTcs?.TrySetResult(false);
-                DispatchToMainThread(() => OnError?.Invoke("Failed to enable camera"));
+                DispatchToMainThread(() => OnError?.Invoke("Failed to start webcam"));
                 yield break;
             }
 
+            // TODO: To publish video to LiveKit, implement a custom RtcVideoSource that
+            // feeds frames from WebcamVideoSource to LiveKit's video pipeline.
+            // For now, we just capture locally which can be used for preview or
+            // manual frame processing (e.g., sending to a vision API).
+            
+            Log($"Webcam capture started: {_webcamSource.Width}x{_webcamSource.Height}");
+            Log("Note: Full LiveKit video track publishing requires RtcVideoSource implementation");
+
             IsPublishing = true;
-            Log("Video publishing started via LiveKit camera");
             
             _publishTcs?.TrySetResult(true);
             DispatchToMainThread(() => OnPublishingStarted?.Invoke());
@@ -219,11 +250,9 @@ namespace Estuary
                     _webcamSource = null;
                 }
 
-                // Disable camera
-                if (_room?.LocalParticipant != null && _coroutineRunner != null)
-                {
-                    _coroutineRunner.StartCoroutine(DisableCameraCoroutine());
-                }
+                // Unpublish video track if we had one
+                // Note: Currently we only do local capture, not LiveKit publishing
+                _localVideoTrack = null;
 
                 _room = null;
                 IsPublishing = false;
@@ -238,16 +267,6 @@ namespace Estuary
             await Task.CompletedTask;
         }
 
-#if LIVEKIT_AVAILABLE
-        private IEnumerator DisableCameraCoroutine()
-        {
-            if (_room?.LocalParticipant != null)
-            {
-                var disableInstruction = _room.LocalParticipant.SetCameraEnabled(false);
-                yield return disableInstruction;
-            }
-        }
-#endif
 
         /// <summary>
         /// Update video settings while publishing.
@@ -345,6 +364,7 @@ namespace Estuary
             }
 
 #if LIVEKIT_AVAILABLE
+            _localVideoTrack = null;
             _room = null;
 #endif
         }
