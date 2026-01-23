@@ -326,9 +326,41 @@ namespace Estuary
                 yield break;
             }
 
-            // Create DirectMicrophoneSource - our custom implementation that bypasses Unity's audio DSP
+#if UNITY_ANDROID && !UNITY_EDITOR
+            // On Android, configure the audio system for voice communication mode
+            // This enables hardware AEC (Acoustic Echo Cancellation) at the platform level
+            Log("Configuring Android audio for voice chat with AEC...");
+            Log(AndroidAudioConfiguration.GetAudioCapabilitiesInfo());
+            
+            if (!AndroidAudioConfiguration.ConfigureForVoiceChat())
+            {
+                LogError("Failed to configure Android audio - AEC may not be enabled");
+            }
+            else
+            {
+                Log($"Android AEC available: {AndroidAudioConfiguration.IsAecAvailable()}");
+                Log($"Android NS available: {AndroidAudioConfiguration.IsNoiseSuppressionAvailable()}");
+            }
+            
+            // Create DirectMicrophoneSource - it extends RtcAudioSource with AudioSourceMicrophone type
+            // Combined with MODE_IN_COMMUNICATION audio mode, this enables hardware AEC
+            _microphoneSource = new DirectMicrophoneSource(deviceName, _coroutineRunner);
+            
+            // Create local audio track from microphone source
+            _localAudioTrack = LocalAudioTrack.CreateAudioTrack("microphone", _microphoneSource, _room);
+            
+            // Create publish options with audio processing enabled
+            var options = new TrackPublishOptions();
+            options.AudioEncoding = new AudioEncoding();
+            options.AudioEncoding.MaxBitrate = 64000;
+            options.Source = TrackSource.SourceMicrophone;
+            // Note: LiveKit Unity SDK enables AEC/NS/AGC by default for microphone sources
+            // The RtcAudioSourceType.AudioSourceMicrophone signals WebRTC to apply AEC
+#else
+            // On other platforms (macOS, Windows, iOS, Editor), use DirectMicrophoneSource
             // This solves the sample rate mismatch issue on macOS when using built-in speakers
             // DirectMicrophoneSource polls the mic directly at 48kHz, regardless of output device settings
+            Log("Using DirectMicrophoneSource for non-Android platform");
             _microphoneSource = new DirectMicrophoneSource(deviceName, _coroutineRunner);
 
             // Create local audio track from microphone source
@@ -339,6 +371,7 @@ namespace Estuary
             options.AudioEncoding = new AudioEncoding();
             options.AudioEncoding.MaxBitrate = 64000;
             options.Source = TrackSource.SourceMicrophone;
+#endif
 
             // Publish the track
             var publishInstruction = _room.LocalParticipant.PublishTrack(_localAudioTrack, options);
@@ -356,7 +389,11 @@ namespace Estuary
             _microphoneSource.Start();
 
             IsPublishing = true;
-            Log("Microphone capture started (AEC enabled via direct polling at 48kHz)");
+#if UNITY_ANDROID && !UNITY_EDITOR
+            Log("Microphone capture started (AEC enabled via Android platform audio processing)");
+#else
+            Log("Microphone capture started (AEC enabled via WebRTC)");
+#endif
             _publishTcs?.TrySetResult(true);
             DispatchToMainThread(() => OnMuteStateChanged?.Invoke(false));
         }
@@ -392,6 +429,11 @@ namespace Estuary
                     _room.LocalParticipant.UnpublishTrack(_localAudioTrack, true);
                     _localAudioTrack = null;
                 }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+                // Reset Android audio configuration
+                AndroidAudioConfiguration.ResetConfiguration();
+#endif
 
                 IsPublishing = false;
                 Log("Microphone stopped");
@@ -481,6 +523,30 @@ namespace Estuary
                 await MuteAsync();
             else
                 await UnmuteAsync();
+        }
+
+        /// <summary>
+        /// Signal an interrupt to stop receiving bot audio.
+        /// This notifies the server to stop streaming TTS audio.
+        /// </summary>
+        /// <param name="messageId">Optional message ID being interrupted</param>
+        public async Task SignalInterruptAsync(string messageId = null)
+        {
+            if (!IsConnected)
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            Log($"Signaling interrupt to server (messageId: {messageId ?? "none"})");
+
+            // Notify server via EstuaryClient to stop sending audio
+            if (EstuaryManager.HasInstance && EstuaryManager.Instance.IsConnected)
+            {
+                await EstuaryManager.Instance.NotifyInterruptAsync(messageId);
+            }
+
+            await Task.CompletedTask;
         }
 
         /// <summary>
@@ -589,6 +655,11 @@ namespace Estuary
             
             _localAudioTrack = null;
             _room = null;
+#endif
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            // Reset Android audio configuration
+            AndroidAudioConfiguration.ResetConfiguration();
 #endif
         }
 

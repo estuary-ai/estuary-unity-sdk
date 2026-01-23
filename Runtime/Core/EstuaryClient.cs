@@ -310,6 +310,30 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Notify the server that the client is interrupting the current response.
+        /// This signals the server to stop streaming TTS audio and stop generation.
+        /// </summary>
+        /// <param name="messageId">Optional message ID being interrupted</param>
+        public async Task NotifyInterruptAsync(string messageId = null)
+        {
+            if (!IsConnected)
+            {
+                Log("Cannot notify interrupt: not connected");
+                return;
+            }
+
+            Log($"Notifying server of client interrupt (messageId: {messageId ?? "none"})");
+            var payload = new ClientInterruptPayload { message_id = messageId };
+            await _socket.EmitAsync("client_interrupt", payload);
+        }
+
+        [Serializable]
+        private class ClientInterruptPayload
+        {
+            public string message_id;
+        }
+
+        /// <summary>
         /// Emit a custom event to the server.
         /// Used by world model components to send video frames, poses, etc.
         /// </summary>

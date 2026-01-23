@@ -402,6 +402,22 @@ namespace Estuary
             await _client.NotifyAudioPlaybackCompleteAsync();
         }
 
+        /// <summary>
+        /// Notify the server that the client is interrupting the current response.
+        /// This signals the server to stop streaming TTS audio and generation.
+        /// </summary>
+        /// <param name="messageId">Optional message ID being interrupted</param>
+        public async Task NotifyInterruptAsync(string messageId = null)
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                return;
+            }
+
+            Log($"Notifying server of interrupt (messageId: {messageId ?? "none"})");
+            await _client.NotifyInterruptAsync(messageId);
+        }
+
         #region LiveKit Methods
 
         /// <summary>
@@ -667,9 +683,17 @@ namespace Estuary
 
         private void HandleInterrupt(InterruptData data)
         {
-            Log($"Interrupt: {data}");
+            Log($"Interrupt received: {data}");
 
-            // Route to active character
+            // Signal the server to stop sending audio (if we're in LiveKit mode)
+            // This ensures the server stops TTS streaming immediately
+            if (_liveKitManager != null && _liveKitManager.IsConnected)
+            {
+                // Fire and forget - don't await in event handler
+                _ = _liveKitManager.SignalInterruptAsync(data?.MessageId);
+            }
+
+            // Route to active character (this will stop audio playback via EstuaryAudioSource)
             _activeCharacter?.HandleInterrupt(data);
         }
 

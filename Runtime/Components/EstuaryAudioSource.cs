@@ -116,17 +116,24 @@ namespace Estuary
         // LiveKit mode fields
         private LiveKitVoiceManager _liveKitManager;
         private bool _useLiveKit;
-        private readonly Queue<byte[]> _liveKitAudioQueue = new Queue<byte[]>();
-        private int _liveKitSampleRate = 48000;
+        private int _liveKitSampleRate = 24000;
         private int _liveKitChannels = 1;
         private Coroutine _liveKitPlaybackCoroutine;
-        private AudioClip _liveKitStreamClip;
-        private float[] _liveKitBuffer;
         private readonly object _liveKitLock = new object();
 
-        // LiveKit streaming buffer
-        private const int LIVEKIT_BUFFER_SECONDS = 1;
-        private const float LIVEKIT_BUFFER_THRESHOLD = 0.1f; // Start playing when 100ms of audio is buffered
+        // Ring buffer for continuous audio streaming (fixes audio gaps)
+        private const int RING_BUFFER_SECONDS = 3;
+        private const float MIN_BUFFER_BEFORE_PLAY = 0.15f; // 150ms pre-buffer before starting playback
+        private const float BUFFER_LOW_THRESHOLD = 0.05f; // 50ms - consider underrun if below this
+        private float[] _ringBuffer;
+        private int _ringBufferSize;
+        private int _writePosition;
+        private int _readPosition;
+        private int _samplesAvailable;
+        private bool _isStreamingActive;
+        private bool _hasStartedPlaying;
+        private AudioClip _streamingClip;
+        private bool _streamingClipPlaying;
 
         private struct AudioQueueItem
         {
@@ -269,24 +276,40 @@ namespace Estuary
         /// </summary>
         public void StopPlayback()
         {
-            // Stop coroutine
+            // Stop WebSocket queue coroutine
             if (_playbackCoroutine != null)
             {
                 StopCoroutine(_playbackCoroutine);
                 _playbackCoroutine = null;
             }
 
+            // Stop LiveKit streaming coroutine
+            if (_liveKitPlaybackCoroutine != null)
+            {
+                StopCoroutine(_liveKitPlaybackCoroutine);
+                _liveKitPlaybackCoroutine = null;
+            }
+
             // Stop audio
             if (audioSource != null && audioSource.isPlaying)
             {
                 audioSource.Stop();
+                audioSource.loop = false;
             }
 
-            // Clear queue
+            // Clear WebSocket queue
             ClearQueue();
+
+            // Clear LiveKit ring buffer
+            if (_useLiveKit)
+            {
+                ClearLiveKitAudioBuffer();
+            }
 
             _isProcessingQueue = false;
             _currentlyPlayingMessageId = null;
+            _isStreamingActive = false;
+            _streamingClipPlaying = false;
 
             // Fire interrupted event
             OnPlaybackInterrupted?.Invoke();
@@ -423,40 +446,82 @@ namespace Estuary
 
         #endregion
 
-        #region LiveKit Audio Handling
+        #region LiveKit Audio Handling - Ring Buffer Streaming
 
         private void InitializeLiveKitBuffer()
         {
-            // Create a streaming buffer for LiveKit audio
-            var bufferSize = _liveKitSampleRate * LIVEKIT_BUFFER_SECONDS;
-            _liveKitBuffer = new float[bufferSize];
+            // Create ring buffer for continuous audio streaming
+            // Buffer size = sample rate * channels * seconds
+            _ringBufferSize = _liveKitSampleRate * _liveKitChannels * RING_BUFFER_SECONDS;
+            _ringBuffer = new float[_ringBufferSize];
+            _writePosition = 0;
+            _readPosition = 0;
+            _samplesAvailable = 0;
+            _isStreamingActive = false;
+            _hasStartedPlaying = false;
+            _streamingClipPlaying = false;
 
-            lock (_liveKitLock)
-            {
-                _liveKitAudioQueue.Clear();
-            }
+            Debug.Log($"[EstuaryAudioSource] Initialized ring buffer: {_ringBufferSize} samples ({RING_BUFFER_SECONDS}s at {_liveKitSampleRate}Hz)");
         }
 
         private void CleanupLiveKitBuffer()
         {
+            _isStreamingActive = false;
+            _hasStartedPlaying = false;
+            _streamingClipPlaying = false;
+
             if (_liveKitPlaybackCoroutine != null)
             {
                 StopCoroutine(_liveKitPlaybackCoroutine);
                 _liveKitPlaybackCoroutine = null;
             }
 
-            if (_liveKitStreamClip != null)
+            if (audioSource != null && audioSource.isPlaying)
             {
-                Destroy(_liveKitStreamClip);
-                _liveKitStreamClip = null;
+                audioSource.Stop();
             }
 
-            _liveKitBuffer = null;
+            if (_streamingClip != null)
+            {
+                Destroy(_streamingClip);
+                _streamingClip = null;
+            }
 
             lock (_liveKitLock)
             {
-                _liveKitAudioQueue.Clear();
+                _ringBuffer = null;
+                _writePosition = 0;
+                _readPosition = 0;
+                _samplesAvailable = 0;
             }
+        }
+
+        /// <summary>
+        /// Clear all pending audio from the ring buffer (used for interrupts).
+        /// </summary>
+        public void ClearLiveKitAudioBuffer()
+        {
+            lock (_liveKitLock)
+            {
+                if (_ringBuffer != null)
+                {
+                    Array.Clear(_ringBuffer, 0, _ringBuffer.Length);
+                }
+                _writePosition = 0;
+                _readPosition = 0;
+                _samplesAvailable = 0;
+            }
+
+            _hasStartedPlaying = false;
+
+            if (audioSource != null && audioSource.isPlaying)
+            {
+                audioSource.Stop();
+            }
+            
+            _streamingClipPlaying = false;
+
+            Debug.Log("[EstuaryAudioSource] Cleared LiveKit audio buffer (interrupt)");
         }
 
         private void HandleLiveKitAudioReceived(byte[] pcmData, int sampleRate, int channels)
@@ -464,7 +529,7 @@ namespace Estuary
             if (!_useLiveKit || pcmData == null || pcmData.Length == 0)
                 return;
 
-            // Update sample rate and channels if different
+            // Update sample rate and channels if different - reinitialize buffer
             if (sampleRate != _liveKitSampleRate || channels != _liveKitChannels)
             {
                 _liveKitSampleRate = sampleRate;
@@ -472,95 +537,200 @@ namespace Estuary
                 InitializeLiveKitBuffer();
             }
 
-            // Queue the audio data
+            // Convert PCM16 bytes to float samples
+            var samples = AudioConverter.PCM16ToFloat(pcmData);
+            if (samples.Length == 0)
+                return;
+
+            // Write samples to ring buffer
             lock (_liveKitLock)
             {
-                _liveKitAudioQueue.Enqueue(pcmData);
+                if (_ringBuffer == null)
+                    return;
+
+                for (int i = 0; i < samples.Length; i++)
+                {
+                    _ringBuffer[_writePosition] = samples[i];
+                    _writePosition = (_writePosition + 1) % _ringBufferSize;
+                    
+                    // Track available samples, cap at buffer size
+                    if (_samplesAvailable < _ringBufferSize)
+                    {
+                        _samplesAvailable++;
+                    }
+                    else
+                    {
+                        // Buffer overflow - move read position to avoid playing old data
+                        _readPosition = (_readPosition + 1) % _ringBufferSize;
+                    }
+                }
             }
 
-            // Start playback coroutine if not already running
-            if (_liveKitPlaybackCoroutine == null)
+            // Start streaming playback if not already running
+            if (!_isStreamingActive)
             {
-                _liveKitPlaybackCoroutine = StartCoroutine(ProcessLiveKitAudioCoroutine());
+                _isStreamingActive = true;
+                _liveKitPlaybackCoroutine = StartCoroutine(StreamingPlaybackCoroutine());
             }
         }
 
-        private IEnumerator ProcessLiveKitAudioCoroutine()
+        private IEnumerator StreamingPlaybackCoroutine()
         {
-            var isFirstChunk = true;
+            Debug.Log("[EstuaryAudioSource] Starting streaming playback coroutine");
 
-            while (_useLiveKit)
+            // Calculate pre-buffer threshold in samples
+            int preBufferSamples = (int)(_liveKitSampleRate * _liveKitChannels * MIN_BUFFER_BEFORE_PLAY);
+            float emptyBufferTime = 0f;
+            const float maxEmptyBufferWait = 1.0f; // Consider stream ended after 1s of empty buffer
+
+            // Wait for minimum buffer before starting playback
+            while (_isStreamingActive)
             {
-                byte[] audioData = null;
-
+                int available;
                 lock (_liveKitLock)
                 {
-                    if (_liveKitAudioQueue.Count > 0)
-                    {
-                        audioData = _liveKitAudioQueue.Dequeue();
-                    }
+                    available = _samplesAvailable;
                 }
 
-                if (audioData != null)
+                if (available >= preBufferSamples)
                 {
-                    // Convert PCM16 bytes to float samples
-                    var samples = AudioConverter.PCM16ToFloat(audioData);
+                    Debug.Log($"[EstuaryAudioSource] Pre-buffer threshold reached: {available} samples ({(float)available / _liveKitSampleRate / _liveKitChannels * 1000:F0}ms)");
+                    break;
+                }
 
-                    if (samples.Length > 0)
+                yield return new WaitForSeconds(0.01f);
+            }
+
+            if (!_isStreamingActive)
+            {
+                _liveKitPlaybackCoroutine = null;
+                yield break;
+            }
+
+            // Create streaming AudioClip with PCM reader callback
+            _streamingClip = AudioClip.Create(
+                "LiveKitStream",
+                _ringBufferSize / _liveKitChannels, // Length in samples per channel
+                _liveKitChannels,
+                _liveKitSampleRate,
+                true, // Stream
+                OnAudioRead,
+                OnAudioSetPosition
+            );
+
+            audioSource.clip = _streamingClip;
+            audioSource.loop = true; // Loop to keep playing continuously
+            audioSource.Play();
+            _streamingClipPlaying = true;
+
+            // Fire playback started event
+            if (!_hasStartedPlaying)
+            {
+                _hasStartedPlaying = true;
+                OnPlaybackStarted?.Invoke();
+                onPlaybackStarted?.Invoke();
+                Debug.Log("[EstuaryAudioSource] Started LiveKit streaming playback");
+            }
+
+            // Monitor buffer and detect end of stream
+            while (_isStreamingActive && _streamingClipPlaying)
+            {
+                int available;
+                lock (_liveKitLock)
+                {
+                    available = _samplesAvailable;
+                }
+
+                if (available == 0)
+                {
+                    emptyBufferTime += 0.05f;
+                    
+                    if (emptyBufferTime >= maxEmptyBufferWait)
                     {
-                        // Create AudioClip for this chunk
-                        var clip = AudioConverter.CreateAudioClip(samples, _liveKitSampleRate, _liveKitChannels, "LiveKitAudio");
-
-                        if (clip != null)
-                        {
-                            // Fire started event on first chunk
-                            if (isFirstChunk)
-                            {
-                                isFirstChunk = false;
-                                OnPlaybackStarted?.Invoke();
-                                onPlaybackStarted?.Invoke();
-                                Debug.Log("[EstuaryAudioSource] Started LiveKit audio playback");
-                            }
-
-                            // Play the clip
-                            audioSource.clip = clip;
-                            audioSource.Play();
-
-                            // Wait for clip to finish
-                            while (audioSource.isPlaying)
-                            {
-                                yield return null;
-                            }
-
-                            // Cleanup
-                            Destroy(clip);
-                        }
+                        // Stream appears to have ended
+                        Debug.Log("[EstuaryAudioSource] Stream ended (buffer empty for 1s)");
+                        break;
                     }
                 }
                 else
                 {
-                    // No audio in queue, wait a bit and check if there's more coming
-                    yield return new WaitForSeconds(0.05f);
-
-                    // Check if queue is still empty after waiting
-                    bool queueEmpty;
-                    lock (_liveKitLock)
-                    {
-                        queueEmpty = _liveKitAudioQueue.Count == 0;
-                    }
-
-                    if (queueEmpty && !isFirstChunk)
-                    {
-                        // Playback complete
-                        OnPlaybackComplete?.Invoke();
-                        onPlaybackComplete?.Invoke();
-                        Debug.Log("[EstuaryAudioSource] LiveKit audio playback complete");
-                        isFirstChunk = true; // Reset for next playback session
-                    }
+                    emptyBufferTime = 0f;
                 }
+
+                yield return new WaitForSeconds(0.05f);
             }
 
+            // Stop playback
+            if (audioSource != null && audioSource.isPlaying)
+            {
+                audioSource.Stop();
+                audioSource.loop = false;
+            }
+            _streamingClipPlaying = false;
+
+            // Fire playback complete event
+            if (_hasStartedPlaying)
+            {
+                _hasStartedPlaying = false;
+                OnPlaybackComplete?.Invoke();
+                onPlaybackComplete?.Invoke();
+                Debug.Log("[EstuaryAudioSource] LiveKit streaming playback complete");
+
+                // Notify server
+                NotifyPlaybackComplete();
+            }
+
+            // Cleanup
+            if (_streamingClip != null)
+            {
+                Destroy(_streamingClip);
+                _streamingClip = null;
+            }
+
+            _isStreamingActive = false;
             _liveKitPlaybackCoroutine = null;
+        }
+
+        /// <summary>
+        /// PCM reader callback for streaming AudioClip.
+        /// Called by Unity's audio thread to fill the playback buffer.
+        /// </summary>
+        private void OnAudioRead(float[] data)
+        {
+            lock (_liveKitLock)
+            {
+                if (_ringBuffer == null)
+                {
+                    // Fill with silence if no buffer
+                    Array.Clear(data, 0, data.Length);
+                    return;
+                }
+
+                int samplesToRead = Math.Min(data.Length, _samplesAvailable);
+                
+                for (int i = 0; i < samplesToRead; i++)
+                {
+                    data[i] = _ringBuffer[_readPosition];
+                    _readPosition = (_readPosition + 1) % _ringBufferSize;
+                }
+                
+                _samplesAvailable -= samplesToRead;
+
+                // Fill remaining with silence (buffer underrun)
+                if (samplesToRead < data.Length)
+                {
+                    Array.Clear(data, samplesToRead, data.Length - samplesToRead);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Position callback for streaming AudioClip.
+        /// Called when the clip position is set.
+        /// </summary>
+        private void OnAudioSetPosition(int newPosition)
+        {
+            // We don't support seeking in our ring buffer, just ignore
         }
 
         #endregion

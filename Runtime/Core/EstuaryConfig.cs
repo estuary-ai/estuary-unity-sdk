@@ -244,6 +244,17 @@ namespace Estuary
                 }
             }
 
+            // Avoid stripping scheme-only input while typing in the inspector.
+            if (trimmed.Length <= "http://".Length && trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed;
+            }
+
+            if (trimmed.Length <= "https://".Length && trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed;
+            }
+
             // Remove trailing slash
             return trimmed.TrimEnd('/');
         }
