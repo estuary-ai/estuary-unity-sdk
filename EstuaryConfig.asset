@@ -13,15 +13,10 @@ MonoBehaviour:
   m_Name: EstuaryConfig
   m_EditorClassIdentifier: 
   serverUrl: https://api.estuary-ai.com
-  apiKey: 
-  characterId: 
-  playerId: 
+  apiKey: est_GRV0o87o7GxYGD5I5TJ_nj1W1PkZCumMOIP0cNWZxLY
   voiceMode: 1
   autoConnectLiveKit: 1
   recordingSampleRate: 16000
   playbackSampleRate: 24000
   audioChunkDurationMs: 100
-  autoReconnect: 1
-  maxReconnectAttempts: 5
-  reconnectDelayMs: 2000
-  debugLogging: 0
+  debugLogging: 1
