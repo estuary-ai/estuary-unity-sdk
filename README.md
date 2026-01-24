@@ -205,7 +205,6 @@ LiveKit provides:
 - Low-latency WebRTC audio streaming
 - Native Acoustic Echo Cancellation (AEC)
 - Automatic Gain Control (AGC)
-- Noise Suppression
 
 ```csharp
 // Configuration will automatically use LiveKit if available

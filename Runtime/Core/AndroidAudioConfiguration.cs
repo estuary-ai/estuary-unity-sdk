@@ -238,30 +238,6 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Check if noise suppression is available on this device.
-        /// </summary>
-        /// <returns>True if noise suppression is available</returns>
-        public static bool IsNoiseSuppressionAvailable()
-        {
-#if UNITY_ANDROID && !UNITY_EDITOR
-            try
-            {
-                using (var nsClass = new AndroidJavaClass("android.media.audiofx.NoiseSuppressor"))
-                {
-                    return nsClass.CallStatic<bool>("isAvailable");
-                }
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogWarning($"[AndroidAudioConfiguration] Failed to check NS availability: {e.Message}");
-                return false;
-            }
-#else
-            return true;
-#endif
-        }
-
-        /// <summary>
         /// Get information about device audio capabilities for debugging.
         /// </summary>
         public static string GetAudioCapabilitiesInfo()
@@ -273,7 +249,6 @@ namespace Estuary
             info.AppendLine($"Current Audio Mode: {_currentMode}");
             info.AppendLine($"Is Configured: {_isConfigured}");
             info.AppendLine($"AEC Available: {IsAecAvailable()}");
-            info.AppendLine($"Noise Suppression Available: {IsNoiseSuppressionAvailable()}");
             info.AppendLine($"Microphone Devices: {Microphone.devices.Length}");
             
             foreach (var device in Microphone.devices)

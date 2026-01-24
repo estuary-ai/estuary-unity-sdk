@@ -21,7 +21,6 @@ namespace Estuary
     /// This class still uses LiveKit's RtcAudioSource base class, which means:
     /// - AEC (Acoustic Echo Cancellation) is still enabled via native WebRTC
     /// - AGC (Auto Gain Control) is still enabled
-    /// - Noise Suppression is still enabled
     /// </summary>
 #if LIVEKIT_AVAILABLE
     public sealed class DirectMicrophoneSource : RtcAudioSource
@@ -66,12 +65,64 @@ namespace Estuary
             if (_started || _disposed) return;
             
             base.Start();
-            
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            // On Android, check and request microphone permission first
+            if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
+            {
+                Debug.Log("[DirectMicrophoneSource] Requesting microphone permission...");
+                UnityEngine.Android.Permission.RequestUserPermission(UnityEngine.Android.Permission.Microphone);
+                
+                // Permission request is async, start a coroutine to wait for it
+                if (_coroutineRunner != null)
+                {
+                    _coroutineRunner.StartCoroutine(WaitForPermissionAndStart());
+                }
+                else
+                {
+                    Debug.LogError("[DirectMicrophoneSource] No coroutine runner to wait for permission");
+                }
+                return;
+            }
+#else
             if (!Application.HasUserAuthorization(UserAuthorization.Microphone))
             {
                 Debug.LogError("[DirectMicrophoneSource] Microphone access not authorized");
                 return;
             }
+#endif
+            
+            StartMicrophoneInternal();
+        }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        private IEnumerator WaitForPermissionAndStart()
+        {
+            // Wait for permission with timeout
+            float timeout = 10f;
+            float elapsed = 0f;
+            
+            while (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone) && elapsed < timeout)
+            {
+                yield return new WaitForSeconds(0.5f);
+                elapsed += 0.5f;
+            }
+            
+            if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
+            {
+                Debug.Log("[DirectMicrophoneSource] Microphone permission granted, starting capture");
+                StartMicrophoneInternal();
+            }
+            else
+            {
+                Debug.LogError("[DirectMicrophoneSource] Microphone permission denied or timed out");
+            }
+        }
+#endif
+
+        private void StartMicrophoneInternal()
+        {
+            if (_started || _disposed) return;
             
             // Start Unity microphone at exactly 48000 Hz
             _micClip = Microphone.Start(_deviceName, loop: true, lengthSec: 1, frequency: SAMPLE_RATE);

@@ -112,7 +112,7 @@ namespace Estuary
 #if LIVEKIT_AVAILABLE
         private Room _room;
         private LocalAudioTrack _localAudioTrack;
-        private DirectMicrophoneSource _microphoneSource;
+        private RtcAudioSource _microphoneSource;
         private IRemoteTrack _botAudioTrack;  // Track from bot for muting during interrupts
         private RemoteTrackPublication _botAudioPublication;  // Publication for enabling/disabling
         private bool _botAudioMuted;
@@ -284,7 +284,7 @@ namespace Estuary
 
         /// <summary>
         /// Start publishing audio using native WebRTC microphone capture.
-        /// This enables proper AEC (Acoustic Echo Cancellation), noise suppression, and auto gain control.
+        /// This enables proper AEC (Acoustic Echo Cancellation) and auto gain control.
         /// </summary>
         public async Task<bool> StartPublishingAsync()
         {
@@ -358,10 +358,6 @@ namespace Estuary
             // NOTE: Using AndroidAudioMode.Normal by default for better audio streaming.
             // MODE_IN_COMMUNICATION can cause choppy audio on some devices (especially AR glasses)
             // as it changes audio buffering behavior.
-            // 
-            // If you need better AEC quality and don't experience choppy audio, you can set:
-            // AndroidAudioConfiguration.PreferredMode = AndroidAudioMode.VoiceCommunication;
-            // before calling StartPublishingAsync()
             Log("Configuring Android audio for voice chat...");
             Log(AndroidAudioConfiguration.GetAudioCapabilitiesInfo());
             
@@ -379,28 +375,16 @@ namespace Estuary
             else
             {
                 Log($"Android AEC available: {AndroidAudioConfiguration.IsAecAvailable()}");
-                Log($"Android NS available: {AndroidAudioConfiguration.IsNoiseSuppressionAvailable()}");
             }
-            
-            // Create DirectMicrophoneSource - it extends RtcAudioSource with AudioSourceMicrophone type
-            // Combined with MODE_IN_COMMUNICATION audio mode, this enables hardware AEC
-            _microphoneSource = new DirectMicrophoneSource(deviceName, _coroutineRunner);
-            
-            // Create local audio track from microphone source
-            _localAudioTrack = LocalAudioTrack.CreateAudioTrack("microphone", _microphoneSource, _room);
-            
-            // Create publish options with audio processing enabled
-            var options = new TrackPublishOptions();
-            options.AudioEncoding = new AudioEncoding();
-            options.AudioEncoding.MaxBitrate = 64000;
-            options.Source = TrackSource.SourceMicrophone;
-            // Note: LiveKit Unity SDK enables AEC/NS/AGC by default for microphone sources
-            // The RtcAudioSourceType.AudioSourceMicrophone signals WebRTC to apply AEC
-#else
-            // On other platforms (macOS, Windows, iOS, Editor), use DirectMicrophoneSource
-            // This solves the sample rate mismatch issue on macOS when using built-in speakers
-            // DirectMicrophoneSource polls the mic directly at 48kHz, regardless of output device settings
-            Log("Using DirectMicrophoneSource for non-Android platform");
+#endif
+
+            // Use DirectMicrophoneSource on all platforms including Android
+            // This uses Unity's built-in Microphone API which works reliably everywhere.
+            // 
+            // NOTE: AndroidMicrophoneSource was previously used on Android but has a fundamental
+            // JNI limitation: Unity's AndroidJavaObject.Call() doesn't return modified array data
+            // from Java methods, so AudioRecord.read() data was never received by C#.
+            Log("Using DirectMicrophoneSource");
             _microphoneSource = new DirectMicrophoneSource(deviceName, _coroutineRunner);
 
             // Create local audio track from microphone source
@@ -411,7 +395,6 @@ namespace Estuary
             options.AudioEncoding = new AudioEncoding();
             options.AudioEncoding.MaxBitrate = 64000;
             options.Source = TrackSource.SourceMicrophone;
-#endif
 
             // Publish the track
             var publishInstruction = _room.LocalParticipant.PublishTrack(_localAudioTrack, options);
