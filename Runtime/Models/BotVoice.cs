@@ -14,6 +14,7 @@ namespace Estuary.Models
         [SerializeField] private int chunkIndex;
         [SerializeField] private string messageId;
         [SerializeField] private bool isInterjection;
+        [SerializeField] private float timestamp;
 
         /// <summary>
         /// Base64-encoded audio data.
@@ -41,6 +42,12 @@ namespace Estuary.Models
         public bool IsInterjection => isInterjection;
 
         /// <summary>
+        /// Server timestamp when this audio chunk was generated (in seconds since epoch).
+        /// Used to filter out audio chunks that were generated before an interrupt.
+        /// </summary>
+        public float Timestamp => timestamp;
+
+        /// <summary>
         /// Decoded audio bytes (cached after first access).
         /// </summary>
         private byte[] _decodedAudio;
@@ -66,12 +73,13 @@ namespace Estuary.Models
 
         public BotVoice() { }
 
-        public BotVoice(string audio, int sampleRate = 24000, string messageId = null, int chunkIndex = 0)
+        public BotVoice(string audio, int sampleRate = 24000, string messageId = null, int chunkIndex = 0, float timestamp = 0f)
         {
             this.audio = audio;
             this.sampleRate = sampleRate;
             this.messageId = messageId;
             this.chunkIndex = chunkIndex;
+            this.timestamp = timestamp;
         }
 
         /// <summary>
@@ -97,7 +105,8 @@ namespace Estuary.Models
                 sampleRate = response.sample_rate > 0 ? response.sample_rate : 24000,
                 chunkIndex = response.chunk_index,
                 messageId = response.message_id,
-                isInterjection = response.is_interjection
+                isInterjection = response.is_interjection,
+                timestamp = response.timestamp
             };
         }
 
@@ -115,6 +124,7 @@ namespace Estuary.Models
             public int chunk_index;
             public string message_id;
             public bool is_interjection;
+            public float timestamp;
         }
     }
 }

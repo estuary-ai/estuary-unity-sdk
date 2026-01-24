@@ -669,7 +669,21 @@ namespace Estuary
         {
             Log($"Bot voice: {voice}");
 
+            // Notify LiveKit manager about new audio chunk for message tracking and timestamp filtering
+            // This allows us to filter out audio chunks from interrupted messages or stale audio
+            if (_liveKitManager != null && _liveKitManager.IsConnected && !string.IsNullOrEmpty(voice.MessageId))
+            {
+                bool shouldPlay = _liveKitManager.NotifyAudioChunk(voice.MessageId, voice.Timestamp);
+                if (!shouldPlay)
+                {
+                    Log($"Skipping stale audio chunk from message {voice.MessageId} (timestamp: {voice.Timestamp})");
+                    return;  // Don't route to character if audio should be discarded
+                }
+            }
+
             // Route to active character
+            // Note: In LiveKit mode, audio plays automatically through LiveKit SDK
+            // The bot_voice event is used for message_id tracking, not actual playback
             _activeCharacter?.HandleBotVoice(voice);
         }
 
@@ -687,10 +701,11 @@ namespace Estuary
 
             // Signal the server to stop sending audio (if we're in LiveKit mode)
             // This ensures the server stops TTS streaming immediately
+            // Pass the interrupt timestamp so we can filter out stale audio packets
             if (_liveKitManager != null && _liveKitManager.IsConnected)
             {
                 // Fire and forget - don't await in event handler
-                _ = _liveKitManager.SignalInterruptAsync(data?.MessageId);
+                _ = _liveKitManager.SignalInterruptAsync(data?.MessageId, data?.InterruptedAt ?? 0f);
             }
 
             // Route to active character (this will stop audio playback via EstuaryAudioSource)

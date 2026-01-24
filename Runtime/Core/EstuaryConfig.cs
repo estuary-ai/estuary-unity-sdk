@@ -35,7 +35,7 @@ namespace Estuary
 
         [Header("Server Settings")]
         [SerializeField]
-        [Tooltip("Estuary server URL (e.g., https://api.estuary-ai.com). ws:// and wss:// are allowed and normalized.")]
+        [Tooltip("Estuary server URL (e.g., https://api.estuary-ai.com)")]
         private string serverUrl = "https://api.estuary-ai.com";
 
         [SerializeField]
@@ -145,12 +145,6 @@ namespace Estuary
 
         private void OnValidate()
         {
-            // Validate server URL
-            if (!string.IsNullOrEmpty(serverUrl))
-            {
-                serverUrl = NormalizeServerUrl(serverUrl, logWarnings: true);
-            }
-
             // Validate API key
             if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("est_"))
             {
@@ -198,65 +192,12 @@ namespace Estuary
         /// <param name="url">The server URL to use</param>
         public void SetServerUrlRuntime(string url)
         {
-            serverUrl = NormalizeServerUrl(url, logWarnings: debugLogging);
+            serverUrl = url;
 
             if (debugLogging)
             {
                 Debug.Log($"[EstuaryConfig] Server URL set to: {serverUrl}");
             }
-        }
-
-        #endregion
-
-        #region Helpers
-
-        private static string NormalizeServerUrl(string url, bool logWarnings)
-        {
-            if (string.IsNullOrEmpty(url))
-            {
-                return "";
-            }
-
-            var trimmed = url.Trim();
-
-            if (trimmed.StartsWith("ws://", StringComparison.OrdinalIgnoreCase))
-            {
-                if (logWarnings)
-                {
-                    Debug.LogWarning("[EstuaryConfig] ws:// is normalized to http:// for Socket.IO");
-                }
-                trimmed = "http://" + trimmed.Substring("ws://".Length);
-            }
-            else if (trimmed.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
-            {
-                if (logWarnings)
-                {
-                    Debug.LogWarning("[EstuaryConfig] wss:// is normalized to https:// for Socket.IO");
-                }
-                trimmed = "https://" + trimmed.Substring("wss://".Length);
-            }
-
-            if (!trimmed.StartsWith("http://") && !trimmed.StartsWith("https://"))
-            {
-                if (logWarnings)
-                {
-                    Debug.LogWarning("[EstuaryConfig] Server URL should start with http:// or https://");
-                }
-            }
-
-            // Avoid stripping scheme-only input while typing in the inspector.
-            if (trimmed.Length <= "http://".Length && trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-            {
-                return trimmed;
-            }
-
-            if (trimmed.Length <= "https://".Length && trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            {
-                return trimmed;
-            }
-
-            // Remove trailing slash
-            return trimmed.TrimEnd('/');
         }
 
         #endregion

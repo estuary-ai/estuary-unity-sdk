@@ -10,17 +10,25 @@ namespace Estuary.Models
     public class InterruptData
     {
         [SerializeField] private string messageId;
+        [SerializeField] private float interruptedAt;
 
         /// <summary>
         /// The message ID that was interrupted.
         /// </summary>
         public string MessageId => messageId;
 
+        /// <summary>
+        /// Server timestamp when the interrupt occurred (in seconds since epoch).
+        /// Used to filter out audio packets that were generated before the interrupt.
+        /// </summary>
+        public float InterruptedAt => interruptedAt;
+
         public InterruptData() { }
 
-        public InterruptData(string messageId)
+        public InterruptData(string messageId, float interruptedAt = 0f)
         {
             this.messageId = messageId;
+            this.interruptedAt = interruptedAt;
         }
 
         /// <summary>
@@ -31,13 +39,14 @@ namespace Estuary.Models
             var data = JsonUtility.FromJson<InterruptDataJson>(json);
             return new InterruptData
             {
-                messageId = data.message_id
+                messageId = data.message_id,
+                interruptedAt = data.interrupted_at
             };
         }
 
         public override string ToString()
         {
-            return $"InterruptData(MessageId={MessageId})";
+            return $"InterruptData(MessageId={MessageId}, InterruptedAt={InterruptedAt})";
         }
 
         // Internal class for JSON deserialization with snake_case fields
@@ -45,6 +54,7 @@ namespace Estuary.Models
         private class InterruptDataJson
         {
             public string message_id;
+            public float interrupted_at;
         }
     }
 }

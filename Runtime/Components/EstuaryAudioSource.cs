@@ -875,8 +875,28 @@ namespace Estuary
         {
             if (autoInterruptOnUserSpeech && IsPlaying)
             {
-                Debug.Log("[EstuaryAudioSource] User speech detected, interrupting playback");
+                Debug.Log("[EstuaryAudioSource] User speech detected, interrupting playback and notifying server");
                 StopPlayback();
+                
+                // CRITICAL: Also notify the server to stop generating audio
+                // Without this, the server keeps generating TTS even though we stopped playback locally
+                NotifyServerInterrupt();
+            }
+        }
+
+        private async void NotifyServerInterrupt()
+        {
+            try
+            {
+                if (EstuaryManager.HasInstance && EstuaryManager.Instance.IsConnected)
+                {
+                    await EstuaryManager.Instance.NotifyInterruptAsync(CurrentMessageId);
+                    Debug.Log($"[EstuaryAudioSource] Notified server of interrupt (messageId: {CurrentMessageId ?? "none"})");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[EstuaryAudioSource] Failed to notify server of interrupt: {e.Message}");
             }
         }
 

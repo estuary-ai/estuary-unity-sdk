@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cd6b71dcdf1be40ab971dd203e96b9c2, type: 3}
   m_Name: EstuaryConfig
   m_EditorClassIdentifier: 
-  serverUrl: ws://localhost:4001
-  apiKey: est_gcqorjceVog-jmsWIly5tedl3QV4SXWONRNUB3RWbaM
+  serverUrl: https://api.estuary-ai.com
+  apiKey: est_VvmZV-egofd3DAofzYi1cH6mJzVheyy3JYmXhV12y3A
   voiceMode: 1
   autoConnectLiveKit: 1
   recordingSampleRate: 16000

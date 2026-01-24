@@ -163,6 +163,13 @@ namespace Estuary
         private LiveKitVoiceManager _liveKitManager;
         private bool _useLiveKit;
 
+        // VAD-only fields for LiveKit mode (parallel Unity microphone capture)
+        private AudioClip _vadRecordingClip;
+        private float[] _vadBuffer;
+        private int _vadLastPosition;
+        private int _vadCoroutineSampleRate;
+        private Coroutine _vadCoroutine;
+
         // Push-to-talk state
         private bool _pttWasPressed;
 
@@ -433,6 +440,11 @@ namespace Estuary
                 IsRecording = true;
                 Debug.Log("[EstuaryMicrophone] LiveKit microphone active (AEC enabled)");
 
+                // Also start Unity microphone capture for local VAD (voice activity detection)
+                // This runs in parallel with LiveKit's native capture, just for detecting user speech
+                // The audio isn't sent anywhere - it's only used to detect interrupts
+                StartUnityMicrophoneForVAD();
+
                 // Fire events
                 OnRecordingStarted?.Invoke();
                 onRecordingStarted?.Invoke();
@@ -443,12 +455,153 @@ namespace Estuary
             }
         }
 
+        /// <summary>
+        /// Start Unity's microphone capture just for VAD (voice activity detection) in LiveKit mode.
+        /// This doesn't interfere with LiveKit's WebRTC capture - it runs in parallel.
+        /// The captured audio is only used to detect when the user is speaking, enabling client-side interrupts.
+        /// </summary>
+        private void StartUnityMicrophoneForVAD()
+        {
+            if (!useVoiceActivityDetection)
+            {
+                Debug.Log("[EstuaryMicrophone] VAD disabled in LiveKit mode - enable useVoiceActivityDetection for client-side interrupts");
+                return;
+            }
+
+            if (_vadRecordingClip != null)
+            {
+                Debug.Log("[EstuaryMicrophone] Unity microphone already running for VAD");
+                return;
+            }
+
+            try
+            {
+                // Use a lower sample rate for VAD-only capture (reduces CPU usage)
+                int vadSampleRate = 16000;
+                
+                // Get device - use empty string for default
+                string device = string.IsNullOrEmpty(microphoneDevice) ? null : microphoneDevice;
+                
+                // Create a short clip for VAD analysis (1 second buffer)
+                _vadRecordingClip = Microphone.Start(device, true, 1, vadSampleRate);
+                
+                if (_vadRecordingClip == null)
+                {
+                    Debug.LogWarning("[EstuaryMicrophone] Failed to start Unity microphone for VAD");
+                    return;
+                }
+
+                // Wait for microphone to initialize
+                int timeout = 0;
+                while (Microphone.GetPosition(device) <= 0 && timeout < 100)
+                {
+                    timeout++;
+                    System.Threading.Thread.Sleep(10);
+                }
+
+                if (Microphone.GetPosition(device) <= 0)
+                {
+                    Debug.LogWarning("[EstuaryMicrophone] Unity microphone didn't start in time for VAD");
+                    Microphone.End(device);
+                    _vadRecordingClip = null;
+                    return;
+                }
+
+                // Initialize VAD state
+                _vadCoroutineSampleRate = vadSampleRate;
+                _vadBuffer = new float[vadSampleRate / 10]; // 100ms buffer for VAD
+                _vadLastPosition = 0;
+                
+                // Start VAD processing coroutine
+                _vadCoroutine = StartCoroutine(ProcessVADCoroutine());
+                
+                Debug.Log("[EstuaryMicrophone] Started Unity microphone for VAD (parallel with LiveKit)");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[EstuaryMicrophone] Error starting Unity microphone for VAD: {e.Message}");
+            }
+        }
+
+        private IEnumerator ProcessVADCoroutine()
+        {
+            string device = string.IsNullOrEmpty(microphoneDevice) ? null : microphoneDevice;
+            
+            while (_vadRecordingClip != null && _useLiveKit && IsRecording)
+            {
+                int currentPos = Microphone.GetPosition(device);
+                
+                if (currentPos > 0 && currentPos != _vadLastPosition)
+                {
+                    int samplesToRead = currentPos - _vadLastPosition;
+                    if (samplesToRead < 0) // Wrapped around
+                    {
+                        samplesToRead = _vadRecordingClip.samples - _vadLastPosition + currentPos;
+                    }
+                    
+                    if (samplesToRead > _vadBuffer.Length)
+                        samplesToRead = _vadBuffer.Length;
+                    
+                    // Read samples for VAD analysis
+                    _vadRecordingClip.GetData(_vadBuffer, _vadLastPosition % _vadRecordingClip.samples);
+                    _vadLastPosition = currentPos;
+                    
+                    // Calculate volume and check for speech
+                    float volume = AudioConverter.CalculateRMS(_vadBuffer);
+                    CurrentVolume = volume;
+                    OnVolumeChanged?.Invoke(volume);
+                    onVolumeChanged?.Invoke(volume);
+                    
+                    // Voice activity detection
+                    bool isSpeaking = volume > vadThreshold;
+                    
+                    if (isSpeaking && !_wasSpeaking)
+                    {
+                        IsSpeechDetected = true;
+                        OnSpeechDetected?.Invoke();
+                        onSpeechDetected?.Invoke();
+                        Debug.Log($"[EstuaryMicrophone] Speech detected in LiveKit mode (volume: {volume:F3})");
+                    }
+                    else if (!isSpeaking && _wasSpeaking)
+                    {
+                        IsSpeechDetected = false;
+                        OnSilenceDetected?.Invoke();
+                        onSilenceDetected?.Invoke();
+                    }
+                    
+                    _wasSpeaking = isSpeaking;
+                }
+                
+                yield return new WaitForSeconds(0.05f); // Check every 50ms
+            }
+        }
+
+        private void StopUnityMicrophoneForVAD()
+        {
+            if (_vadCoroutine != null)
+            {
+                StopCoroutine(_vadCoroutine);
+                _vadCoroutine = null;
+            }
+            
+            if (_vadRecordingClip != null && _useLiveKit)
+            {
+                string device = string.IsNullOrEmpty(microphoneDevice) ? null : microphoneDevice;
+                Microphone.End(device);
+                _vadRecordingClip = null;
+                Debug.Log("[EstuaryMicrophone] Stopped Unity microphone for VAD");
+            }
+        }
+
         private async Task StopLiveKitRecording()
         {
             if (_liveKitManager == null)
                 return;
 
             Debug.Log("[EstuaryMicrophone] Stopping LiveKit microphone...");
+
+            // Stop VAD microphone first
+            StopUnityMicrophoneForVAD();
 
             await _liveKitManager.StopPublishingAsync();
             IsRecording = false;
