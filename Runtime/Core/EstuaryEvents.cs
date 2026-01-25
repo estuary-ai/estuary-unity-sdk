@@ -74,6 +74,25 @@ namespace Estuary
 
         #endregion
 
+        #region Voice Mode Events
+
+        /// <summary>
+        /// Delegate for when voice mode (STT) is started on the backend.
+        /// </summary>
+        public delegate void VoiceStartedHandler();
+
+        /// <summary>
+        /// Delegate for when voice mode (STT) is stopped on the backend.
+        /// </summary>
+        public delegate void VoiceStoppedHandler();
+
+        /// <summary>
+        /// Delegate for voice mode errors.
+        /// </summary>
+        public delegate void VoiceErrorHandler(string errorMessage);
+
+        #endregion
+
         #region LiveKit Events
 
         /// <summary>

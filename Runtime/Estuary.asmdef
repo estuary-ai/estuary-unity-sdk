@@ -2,7 +2,8 @@
     "name": "Estuary",
     "rootNamespace": "Estuary",
     "references": [
-        "LiveKit"
+        "LiveKit",
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

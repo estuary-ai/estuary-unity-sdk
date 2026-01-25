@@ -83,6 +83,21 @@ namespace Estuary
         public event EstuaryEvents.LiveKitErrorHandler OnLiveKitError;
 
         /// <summary>
+        /// Fired when voice mode (backend STT) is started.
+        /// </summary>
+        public event EstuaryEvents.VoiceStartedHandler OnVoiceStarted;
+
+        /// <summary>
+        /// Fired when voice mode (backend STT) is stopped.
+        /// </summary>
+        public event EstuaryEvents.VoiceStoppedHandler OnVoiceStopped;
+
+        /// <summary>
+        /// Fired when a voice mode error occurs.
+        /// </summary>
+        public event EstuaryEvents.VoiceErrorHandler OnVoiceError;
+
+        /// <summary>
         /// Fired when the API key owner has exceeded their monthly interaction quota.
         /// </summary>
         public event EstuaryEvents.QuotaExceededHandler OnQuotaExceeded;
@@ -121,6 +136,11 @@ namespace Estuary
         /// </summary>
         public bool DebugLogging { get; set; }
 
+        /// <summary>
+        /// Whether voice mode (backend STT) is currently active.
+        /// </summary>
+        public bool IsVoiceModeActive => _isVoiceModeActive;
+
         #endregion
 
         #region Private Fields
@@ -133,6 +153,7 @@ namespace Estuary
         private CancellationTokenSource _cancellationTokenSource;
         private int _reconnectAttempts;
         private bool _disposed;
+        private bool _isVoiceModeActive;
 
         // Queue for main thread dispatching
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
@@ -217,6 +238,24 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Send a text message with an explicit text-only override.
+        /// </summary>
+        /// <param name="text">The message text</param>
+        /// <param name="textOnly">If true, suppress TTS for this message</param>
+        public async Task SendTextAsync(string text, bool textOnly)
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot send text: not connected");
+                return;
+            }
+
+            var payload = new TextPayloadWithMode { text = text, textOnly = textOnly };
+            await _socket.EmitAsync("text", payload);
+            Log($"Sent text (textOnly={textOnly}): {text}");
+        }
+
+        /// <summary>
         /// Stream audio data to the server for speech-to-text.
         /// </summary>
         /// <param name="audioBase64">Base64-encoded 16-bit PCM audio at 16kHz</param>
@@ -261,6 +300,52 @@ namespace Estuary
 
             Log("Requesting LiveKit token...");
             await _socket.EmitAsync("livekit_token", null);
+        }
+
+        /// <summary>
+        /// Start voice mode on the backend (enables Deepgram STT).
+        /// Call this before streaming audio to enable speech-to-text.
+        /// The server will respond with a voice_started event.
+        /// </summary>
+        public async Task StartVoiceModeAsync()
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot start voice mode: not connected");
+                return;
+            }
+
+            if (_isVoiceModeActive)
+            {
+                Log("Voice mode already active");
+                return;
+            }
+
+            Log("Starting voice mode...");
+            await _socket.EmitAsync("start_voice", null);
+        }
+
+        /// <summary>
+        /// Stop voice mode on the backend (disables Deepgram STT).
+        /// Call this when switching back to text-only mode.
+        /// The server will respond with a voice_stopped event.
+        /// </summary>
+        public async Task StopVoiceModeAsync()
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot stop voice mode: not connected");
+                return;
+            }
+
+            if (!_isVoiceModeActive)
+            {
+                Log("Voice mode not active");
+                return;
+            }
+
+            Log("Stopping voice mode...");
+            await _socket.EmitAsync("stop_voice", null);
         }
 
         /// <summary>
@@ -444,6 +529,11 @@ namespace Estuary
                 _socket.On("livekit_ready", HandleLiveKitReady);
                 _socket.On("livekit_error", HandleLiveKitError);
 
+                // Voice mode event handlers
+                _socket.On("voice_started", HandleVoiceStarted);
+                _socket.On("voice_stopped", HandleVoiceStopped);
+                _socket.On("voice_error", HandleVoiceError);
+
                 // Quota event handler
                 _socket.On("quota_exceeded", HandleQuotaExceeded);
 
@@ -498,6 +588,13 @@ namespace Estuary
         private class TextPayload
         {
             public string text;
+        }
+
+        [Serializable]
+        private class TextPayloadWithMode
+        {
+            public string text;
+            public bool textOnly;
         }
         
         [Serializable]
@@ -753,6 +850,50 @@ namespace Estuary
             catch (Exception e)
             {
                 LogError($"Failed to parse livekit_error: {e.Message}");
+            }
+        }
+
+        private void HandleVoiceStarted(string json)
+        {
+            Log("Voice mode started on backend");
+            _isVoiceModeActive = true;
+            DispatchToMainThread(() => OnVoiceStarted?.Invoke());
+        }
+
+        private void HandleVoiceStopped(string json)
+        {
+            Log("Voice mode stopped on backend");
+            _isVoiceModeActive = false;
+            DispatchToMainThread(() => OnVoiceStopped?.Invoke());
+        }
+
+        private void HandleVoiceError(string json)
+        {
+            try
+            {
+                var errorMsg = "Voice mode error";
+                if (!string.IsNullOrEmpty(json))
+                {
+                    // Parse {"error": "message"}
+                    var errorStart = json.IndexOf("\"error\"");
+                    if (errorStart >= 0)
+                    {
+                        var valueStart = json.IndexOf(':', errorStart) + 1;
+                        var firstQuote = json.IndexOf('"', valueStart);
+                        var secondQuote = json.IndexOf('"', firstQuote + 1);
+                        if (firstQuote >= 0 && secondQuote > firstQuote)
+                        {
+                            errorMsg = json.Substring(firstQuote + 1, secondQuote - firstQuote - 1);
+                        }
+                    }
+                }
+                
+                LogError($"Voice mode error: {errorMsg}");
+                DispatchToMainThread(() => OnVoiceError?.Invoke(errorMsg));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse voice_error: {e.Message}");
             }
         }
 

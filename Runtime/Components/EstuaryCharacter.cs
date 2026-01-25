@@ -43,6 +43,10 @@ namespace Estuary
         [Tooltip("Microphone component for voice input (optional)")]
         private EstuaryMicrophone microphone;
 
+        [SerializeField]
+        [Tooltip("Automatically start a voice session after connecting")]
+        private bool autoStartVoiceSession = false;
+
         [Header("Actions")]
         [SerializeField]
         [Tooltip("Strip action tags from bot response text (recommended for display)")]
@@ -103,6 +107,15 @@ namespace Estuary
         {
             get => autoConnect;
             set => autoConnect = value;
+        }
+
+        /// <summary>
+        /// Whether to automatically start voice after connecting.
+        /// </summary>
+        public bool AutoStartVoiceSession
+        {
+            get => autoStartVoiceSession;
+            set => autoStartVoiceSession = value;
         }
 
         /// <summary>
@@ -252,6 +265,7 @@ namespace Estuary
 
         /// <summary>
         /// Send a text message to this character.
+        /// Automatically suppresses TTS if voice session is not active.
         /// </summary>
         /// <param name="message">The message to send</param>
         public void SendText(string message)
@@ -260,7 +274,18 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Send a text message to this character with a text-only override.
+        /// </summary>
+        /// <param name="message">The message to send</param>
+        /// <param name="textOnly">If true, suppress TTS for this message</param>
+        public void SendText(string message, bool textOnly)
+        {
+            _ = SendTextAsync(message, textOnly);
+        }
+
+        /// <summary>
         /// Send a text message to this character asynchronously.
+        /// Automatically suppresses TTS if voice session is not active.
         /// </summary>
         /// <param name="message">The message to send</param>
         public async Task SendTextAsync(string message)
@@ -281,7 +306,35 @@ namespace Estuary
             CurrentPartialResponse = "";
             CurrentMessageId = null;
 
-            await EstuaryManager.Instance.SendTextAsync(message);
+            // Automatically suppress TTS when voice session is not active
+            bool textOnly = !IsVoiceSessionActive;
+            await EstuaryManager.Instance.SendTextAsync(message, textOnly);
+        }
+
+        /// <summary>
+        /// Send a text message to this character asynchronously with a text-only override.
+        /// </summary>
+        /// <param name="message">The message to send</param>
+        /// <param name="textOnly">If true, suppress TTS for this message</param>
+        public async Task SendTextAsync(string message, bool textOnly)
+        {
+            if (!IsConnected)
+            {
+                Debug.LogWarning($"[EstuaryCharacter] Cannot send text: not connected");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(message))
+            {
+                Debug.LogWarning($"[EstuaryCharacter] Cannot send empty message");
+                return;
+            }
+
+            // Reset partial response state
+            CurrentPartialResponse = "";
+            CurrentMessageId = null;
+
+            await EstuaryManager.Instance.SendTextAsync(message, textOnly);
         }
 
         /// <summary>
@@ -291,11 +344,23 @@ namespace Estuary
         /// </summary>
         public void StartVoiceSession()
         {
+            _ = StartVoiceSessionAsync();
+        }
+
+        /// <summary>
+        /// Start a voice session for this character asynchronously.
+        /// This enables backend STT (Deepgram) and starts the microphone.
+        /// </summary>
+        public async Task StartVoiceSessionAsync()
+        {
             if (!IsConnected)
             {
                 Debug.LogWarning($"[EstuaryCharacter] Cannot start voice session: not connected");
                 return;
             }
+
+            // Start voice mode on the backend first (enables Deepgram STT)
+            await EstuaryManager.Instance.StartVoiceModeAsync();
 
             IsVoiceSessionActive = true;
             CurrentPartialResponse = "";
@@ -319,9 +384,17 @@ namespace Estuary
                     }
                     else
                     {
-                        // Wait for LiveKit to be ready
+                        // Subscribe to ready event before requesting token
                         Debug.Log($"[EstuaryCharacter] Waiting for LiveKit to be ready before starting microphone...");
                         EstuaryManager.Instance.OnLiveKitReady += OnLiveKitReadyForVoice;
+                        
+                        // Request LiveKit token if not already connecting
+                        // This handles the case where AutoStartVoiceSession was false and we're starting manually
+                        if (EstuaryManager.Instance.LiveKitState == LiveKitConnectionState.Disconnected)
+                        {
+                            Debug.Log($"[EstuaryCharacter] Requesting LiveKit token for manual voice start...");
+                            await EstuaryManager.Instance.RequestLiveKitTokenAsync();
+                        }
                     }
                 }
                 else
@@ -355,6 +428,15 @@ namespace Estuary
         /// </summary>
         public void EndVoiceSession()
         {
+            _ = EndVoiceSessionAsync();
+        }
+
+        /// <summary>
+        /// End the current voice session asynchronously.
+        /// This stops the microphone and disables backend STT (Deepgram).
+        /// </summary>
+        public async Task EndVoiceSessionAsync()
+        {
             IsVoiceSessionActive = false;
 
             Debug.Log($"[EstuaryCharacter] Voice session ended for {characterId}");
@@ -369,6 +451,12 @@ namespace Estuary
             if (microphone != null)
             {
                 microphone.StopRecording();
+            }
+
+            // Stop voice mode on the backend (disables Deepgram STT)
+            if (EstuaryManager.HasInstance && EstuaryManager.Instance.IsConnected)
+            {
+                await EstuaryManager.Instance.StopVoiceModeAsync();
             }
         }
 
@@ -414,6 +502,11 @@ namespace Estuary
             // Invoke events
             OnConnected?.Invoke(sessionInfo);
             onConnected?.Invoke(sessionInfo);
+
+            if (autoStartVoiceSession && !IsVoiceSessionActive)
+            {
+                StartVoiceSession();
+            }
         }
 
         internal void HandleDisconnected(string reason)

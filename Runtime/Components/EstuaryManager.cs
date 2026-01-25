@@ -130,6 +130,11 @@ namespace Estuary
         /// </summary>
         public LiveKitVoiceManager LiveKitManager => _liveKitManager;
 
+        /// <summary>
+        /// Whether voice mode (backend STT) is currently active.
+        /// </summary>
+        public bool IsVoiceModeActive => _client?.IsVoiceModeActive ?? false;
+
         #endregion
 
         #region Events
@@ -376,6 +381,22 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Send a text message to the current character with a text-only override.
+        /// </summary>
+        /// <param name="text">The message text</param>
+        /// <param name="textOnly">If true, suppress TTS for this message</param>
+        public async Task SendTextAsync(string text, bool textOnly)
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Debug.LogError("[EstuaryManager] Cannot send text: not connected");
+                return;
+            }
+
+            await _client.SendTextAsync(text, textOnly);
+        }
+
+        /// <summary>
         /// Stream audio data to the server.
         /// </summary>
         /// <param name="audioBase64">Base64-encoded audio</param>
@@ -417,6 +438,42 @@ namespace Estuary
             Log($"Notifying server of interrupt (messageId: {messageId ?? "none"})");
             await _client.NotifyInterruptAsync(messageId);
         }
+
+        #region Voice Mode Methods
+
+        /// <summary>
+        /// Start voice mode on the backend (enables Deepgram STT).
+        /// Call this before streaming audio to enable speech-to-text.
+        /// </summary>
+        public async Task StartVoiceModeAsync()
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Debug.LogError("[EstuaryManager] Cannot start voice mode: not connected");
+                return;
+            }
+
+            Log("Starting voice mode...");
+            await _client.StartVoiceModeAsync();
+        }
+
+        /// <summary>
+        /// Stop voice mode on the backend (disables Deepgram STT).
+        /// Call this when switching back to text-only mode.
+        /// </summary>
+        public async Task StopVoiceModeAsync()
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Debug.LogError("[EstuaryManager] Cannot stop voice mode: not connected");
+                return;
+            }
+
+            Log("Stopping voice mode...");
+            await _client.StopVoiceModeAsync();
+        }
+
+        #endregion
 
         #region LiveKit Methods
 
@@ -641,8 +698,10 @@ namespace Estuary
             // Notify active character
             _activeCharacter?.HandleSessionConnected(sessionInfo);
 
-            // Auto-connect to LiveKit if enabled
-            if (config != null && config.IsLiveKitEnabled && config.AutoConnectLiveKit)
+            // Auto-connect to LiveKit if enabled AND the character wants voice auto-start
+            // If AutoStartVoiceSession is false, don't auto-connect LiveKit - wait for explicit StartVoiceSession()
+            bool characterWantsVoice = _activeCharacter?.AutoStartVoiceSession ?? false;
+            if (config != null && config.IsLiveKitEnabled && config.AutoConnectLiveKit && characterWantsVoice)
             {
                 Log("Auto-requesting LiveKit token...");
                 _ = RequestLiveKitTokenAsync();

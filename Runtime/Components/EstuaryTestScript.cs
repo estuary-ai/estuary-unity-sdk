@@ -6,13 +6,17 @@ namespace Estuary
     {
         [SerializeField] private EstuaryCharacter character;
         [SerializeField] private EstuaryMicrophone microphone;
+        [SerializeField] private bool autoStartVoiceSession = false;
 
         void Start()
         {
             character.OnConnected += (session) =>{
                 Debug.Log("Connected!");
-                character.StartVoiceSession();  // Must start voice session first!
-                microphone.StartRecording();
+                if (autoStartVoiceSession)
+                {
+                    character.StartVoiceSession();
+                    microphone.StartRecording();
+                }
             };
             character.OnBotResponse += (response) => {
                 if (response.IsFinal)
