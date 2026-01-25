@@ -15,7 +15,7 @@ MonoBehaviour:
   serverUrl: https://api.estuary-ai.com
   apiKey: est_GRV0o87o7GxYGD5I5TJ_nj1W1PkZCumMOIP0cNWZxLY
   voiceMode: 1
-  autoConnectLiveKit: 1
+  autoConnectLiveKit: 0
   recordingSampleRate: 16000
   playbackSampleRate: 24000
   audioChunkDurationMs: 100

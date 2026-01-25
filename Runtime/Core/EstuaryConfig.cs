@@ -47,10 +47,6 @@ namespace Estuary
         [Tooltip("Voice communication mode. LiveKit provides lower latency WebRTC streaming.")]
         private VoiceMode voiceMode = VoiceMode.LiveKit;
 
-        [SerializeField]
-        [Tooltip("Automatically connect to LiveKit when session is established (LiveKit mode only)")]
-        private bool autoConnectLiveKit = true;
-
         [Header("Audio Settings")]
         [SerializeField]
         [Tooltip("Sample rate for microphone recording (16000 for WebSocket STT, 48000 for LiveKit)")]
@@ -98,15 +94,6 @@ namespace Estuary
         {
             get => voiceMode;
             set => voiceMode = value;
-        }
-
-        /// <summary>
-        /// Whether to automatically connect to LiveKit when session is established.
-        /// </summary>
-        public bool AutoConnectLiveKit
-        {
-            get => autoConnectLiveKit;
-            set => autoConnectLiveKit = value;
         }
 
         /// <summary>

@@ -497,7 +497,8 @@ namespace Estuary
 
         /// <summary>
         /// Connect to LiveKit using a previously received token.
-        /// This is called automatically when a token is received if AutoConnectLiveKit is enabled.
+        /// This is called automatically when a token is received if the active character
+        /// is set to auto-start voice or a voice session is already active.
         /// </summary>
         public async Task ConnectLiveKitAsync()
         {
@@ -687,6 +688,9 @@ namespace Estuary
             return $"{character.CharacterId}:{character.PlayerId}";
         }
 
+        private bool ActiveCharacterWantsVoiceSession =>
+            _activeCharacter != null && (_activeCharacter.AutoStartVoiceSession || _activeCharacter.IsVoiceSessionActive);
+
         #endregion
 
         #region Event Handlers
@@ -701,7 +705,7 @@ namespace Estuary
             // Auto-connect to LiveKit if enabled AND the character wants voice auto-start
             // If AutoStartVoiceSession is false, don't auto-connect LiveKit - wait for explicit StartVoiceSession()
             bool characterWantsVoice = _activeCharacter?.AutoStartVoiceSession ?? false;
-            if (config != null && config.IsLiveKitEnabled && config.AutoConnectLiveKit && characterWantsVoice)
+            if (config != null && config.IsLiveKitEnabled && characterWantsVoice)
             {
                 Log("Auto-requesting LiveKit token...");
                 _ = RequestLiveKitTokenAsync();
@@ -804,8 +808,8 @@ namespace Estuary
             Log($"Received LiveKit token for room: {tokenResponse.room}");
             _pendingLiveKitToken = tokenResponse;
 
-            // Auto-connect if configured
-            if (config != null && config.AutoConnectLiveKit)
+            // Auto-connect if the active character wants voice
+            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession)
             {
                 await ConnectLiveKitWithTokenAsync(tokenResponse);
             }
@@ -822,8 +826,8 @@ namespace Estuary
                 await _client.NotifyLiveKitJoinedAsync();
             }
 
-            // Start publishing audio
-            if (config != null && config.AutoConnectLiveKit)
+            // Start publishing audio if the active character wants voice
+            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession)
             {
                 await StartLiveKitPublishingAsync();
             }
