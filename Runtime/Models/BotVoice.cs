@@ -15,6 +15,7 @@ namespace Estuary.Models
         [SerializeField] private string messageId;
         [SerializeField] private bool isInterjection;
         [SerializeField] private float timestamp;
+        [SerializeField] private bool isLiveKit;
 
         /// <summary>
         /// Base64-encoded audio data.
@@ -46,6 +47,12 @@ namespace Estuary.Models
         /// Used to filter out audio chunks that were generated before an interrupt.
         /// </summary>
         public float Timestamp => timestamp;
+
+        /// <summary>
+        /// Whether this is a metadata-only event from LiveKit mode.
+        /// When true, audio is delivered via LiveKit WebRTC, not WebSocket.
+        /// </summary>
+        public bool IsLiveKit => isLiveKit;
 
         /// <summary>
         /// Decoded audio bytes (cached after first access).
@@ -106,7 +113,8 @@ namespace Estuary.Models
                 chunkIndex = response.chunk_index,
                 messageId = response.message_id,
                 isInterjection = response.is_interjection,
-                timestamp = response.timestamp
+                timestamp = response.timestamp,
+                isLiveKit = response.is_livekit
             };
         }
 
@@ -125,6 +133,7 @@ namespace Estuary.Models
             public string message_id;
             public bool is_interjection;
             public float timestamp;
+            public bool is_livekit;
         }
     }
 }

@@ -12,13 +12,7 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [
-        {
-            "name": "io.livekit.livekit-sdk",
-            "expression": "",
-            "define": "LIVEKIT_AVAILABLE"
-        }
-    ],
+    "versionDefines": [],
     "noEngineReferences": false
 }
 

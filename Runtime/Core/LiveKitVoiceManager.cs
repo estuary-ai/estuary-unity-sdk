@@ -4,10 +4,8 @@ using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using UnityEngine;
 
-#if LIVEKIT_AVAILABLE
 using LiveKit;
 using LiveKit.Proto;
-#endif
 
 namespace Estuary
 {
@@ -109,19 +107,21 @@ namespace Estuary
 
         #region Private Fields
 
-#if LIVEKIT_AVAILABLE
         private Room _room;
         private LocalAudioTrack _localAudioTrack;
         private RtcAudioSource _microphoneSource;
         private IRemoteTrack _botAudioTrack;  // Track from bot for muting during interrupts
         private RemoteTrackPublication _botAudioPublication;  // Publication for enabling/disabling
         private bool _botAudioMuted;
+        private AudioStream _botAudioStream;  // AudioStream for playing bot audio via LiveKit
+        private GameObject _botAudioGameObject;  // GameObject holding the AudioSource for bot audio
+        private AudioSource _botAudioSource;  // AudioSource for bot audio playback
 
         // Message tracking for interrupt filtering
         private string _currentMessageId;  // Current message being played
         private string _interruptedMessageId;  // Message that was interrupted (to filter out)
         private float _lastInterruptTimestamp;  // Timestamp of last interrupt (to filter stale audio)
-#endif
+
         private bool _disposed;
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
         private MonoBehaviour _coroutineRunner;
@@ -168,7 +168,6 @@ namespace Estuary
                 await DisconnectAsync();
             }
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 CurrentRoomName = roomName;
@@ -203,14 +202,8 @@ namespace Estuary
                 DispatchToMainThread(() => OnError?.Invoke(e.Message));
                 return false;
             }
-#else
-            LogError("LiveKit SDK not available. Please ensure the LiveKit package is installed.");
-            DispatchToMainThread(() => OnError?.Invoke("LiveKit SDK not available"));
-            return false;
-#endif
         }
 
-#if LIVEKIT_AVAILABLE
         private IEnumerator ConnectCoroutine(string url, string token)
         {
             // Configure room options for optimized audio streaming
@@ -242,7 +235,6 @@ namespace Estuary
             _connectTcs?.TrySetResult(true);
             DispatchToMainThread(() => OnConnected?.Invoke(CurrentRoomName));
         }
-#endif
 
         /// <summary>
         /// Disconnect from the current LiveKit room.
@@ -252,7 +244,6 @@ namespace Estuary
             if (!IsConnected)
                 return;
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 Log("Disconnecting from LiveKit room...");
@@ -278,7 +269,7 @@ namespace Estuary
             {
                 LogError($"Error disconnecting from LiveKit: {e.Message}");
             }
-#endif
+
             await Task.CompletedTask;
         }
 
@@ -300,7 +291,6 @@ namespace Estuary
                 return true;
             }
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 Log("Starting native microphone capture with AEC enabled...");
@@ -327,13 +317,8 @@ namespace Estuary
                 DispatchToMainThread(() => OnError?.Invoke($"Failed to enable microphone: {e.Message}"));
                 return false;
             }
-#else
-            LogError("LiveKit SDK not available");
-            return false;
-#endif
         }
 
-#if LIVEKIT_AVAILABLE
         private IEnumerator StartPublishingCoroutine()
         {
             // Get default microphone device
@@ -420,7 +405,6 @@ namespace Estuary
             _publishTcs?.TrySetResult(true);
             DispatchToMainThread(() => OnMuteStateChanged?.Invoke(false));
         }
-#endif
 
         /// <summary>
         /// Stop publishing audio (disable microphone).
@@ -433,7 +417,6 @@ namespace Estuary
                 return;
             }
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 Log("Stopping microphone...");
@@ -466,7 +449,7 @@ namespace Estuary
             {
                 LogError($"Error stopping microphone: {e.Message}");
             }
-#endif
+
             await Task.CompletedTask;
         }
 
@@ -481,7 +464,6 @@ namespace Estuary
                 return;
             }
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 // Mute by stopping the microphone source
@@ -497,7 +479,7 @@ namespace Estuary
             {
                 LogError($"Error muting: {e.Message}");
             }
-#endif
+
             await Task.CompletedTask;
         }
 
@@ -512,7 +494,6 @@ namespace Estuary
                 return;
             }
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 // Unmute by restarting the microphone source
@@ -533,7 +514,7 @@ namespace Estuary
             {
                 LogError($"Error unmuting: {e.Message}");
             }
-#endif
+
             await Task.CompletedTask;
         }
 
@@ -562,10 +543,18 @@ namespace Estuary
                 return;
             }
 
-            Log($"Signaling interrupt to server (messageId: {messageId ?? _currentMessageId ?? "none"}, timestamp: {interruptedAt})");
+            // Validate: Only process interrupt if there's something to interrupt
+            var interruptedId = messageId ?? _currentMessageId;
+            if (string.IsNullOrEmpty(interruptedId) && interruptedAt <= 0f)
+            {
+                Log("Ignoring interrupt with no message_id and no timestamp - nothing to interrupt");
+                await Task.CompletedTask;
+                return;
+            }
+
+            Log($"Signaling interrupt to server (messageId: {interruptedId ?? "none"}, timestamp: {interruptedAt})");
 
             // Mark the current message as interrupted so we can filter out remaining chunks
-            var interruptedId = messageId ?? _currentMessageId;
             if (!string.IsNullOrEmpty(interruptedId))
             {
                 _interruptedMessageId = interruptedId;
@@ -599,81 +588,34 @@ namespace Estuary
         /// <param name="muted">True to mute, false to unmute</param>
         public void MuteBotAudio(bool muted)
         {
-#if LIVEKIT_AVAILABLE
             try
             {
                 _botAudioMuted = muted;
                 bool success = false;
 
-                // Method 1: Try to use LiveKit API to disable the track subscription
-                // This is the cleanest way to stop audio playback
-                if (_botAudioPublication != null && _botAudioTrack != null)
+                // Use volume-based muting to keep AudioStream pipeline intact
+                // AudioStream relies on continuous OnAudioFilterRead callbacks - Stop() breaks it
+                if (_botAudioSource != null)
                 {
-                    try
+                    if (muted)
                     {
-                        // Set the track enabled state - this should stop/resume playback
-                        _botAudioPublication.SetSubscribed(!muted);
-                        Log($"Bot audio track subscription {(muted ? "disabled" : "enabled")} via LiveKit API");
+                        // Mute by setting volume to 0 - keeps AudioStream streaming
+                        _botAudioSource.volume = 0f;
+                        Log("Bot audio MUTED (volume=0) via known AudioSource");
                         success = true;
                     }
-                    catch (System.Exception ex)
+                    else
                     {
-                        Log($"LiveKit API SetSubscribed failed: {ex.Message}, falling back to AudioSource method");
+                        // Unmute by restoring volume
+                        _botAudioSource.volume = 1f;
+                        Log("Bot audio UNMUTED (volume=1) via known AudioSource");
+                        success = true;
                     }
                 }
 
-                // Method 2: Fallback - Find and stop/start Unity AudioSource directly
-                // LiveKit creates AudioSource components for remote audio tracks
                 if (!success)
                 {
-                    var audioSources = UnityEngine.Object.FindObjectsOfType<AudioSource>();
-                    int foundCount = 0;
-
-                    foreach (var source in audioSources)
-                    {
-                        // LiveKit typically names GameObjects with the participant identity or "audio"/"track"
-                        // Look for any playing AudioSource that might be bot audio
-                        var objName = source.gameObject.name.ToLower();
-                        if (objName.Contains("bot") ||
-                            objName.Contains("audio") ||
-                            objName.Contains("track") ||
-                            objName.Contains("remote") ||
-                            objName.Contains("participant"))
-                        {
-                            foundCount++;
-                            if (muted)
-                            {
-                                // STOP the audio source to immediately clear Unity's internal audio buffer
-                                // This is critical for interrupts - muting alone doesn't clear the buffer
-                                if (source.isPlaying)
-                                {
-                                    source.Stop();
-                                    // Also clear the clip to ensure buffer is flushed
-                                    var originalClip = source.clip;
-                                    source.clip = null;
-                                    source.clip = originalClip;
-                                    Log($"Bot audio STOPPED (interrupt) via AudioSource: {source.gameObject.name}");
-                                    success = true;
-                                }
-                            }
-                            else
-                            {
-                                // Resume playback
-                                // LiveKit streaming clips auto-resume when Play() is called
-                                if (!source.isPlaying && source.clip != null)
-                                {
-                                    source.Play();
-                                    Log($"Bot audio RESUMED via AudioSource: {source.gameObject.name}");
-                                    success = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (foundCount == 0)
-                    {
-                        Log($"No LiveKit AudioSource found (searched {audioSources.Length} total AudioSources)");
-                    }
+                    Log($"No bot AudioSource available to {(muted ? "mute" : "unmute")}");
                 }
 
                 // Always fire the event so other components can respond
@@ -681,9 +623,8 @@ namespace Estuary
             }
             catch (System.Exception e)
             {
-                LogError($"Error {(muted ? "stopping" : "resuming")} bot audio: {e.Message}\n{e.StackTrace}");
+                LogError($"Error {(muted ? "muting" : "unmuting")} bot audio: {e.Message}\n{e.StackTrace}");
             }
-#endif
         }
 
         /// <summary>
@@ -693,11 +634,7 @@ namespace Estuary
         {
             get
             {
-#if LIVEKIT_AVAILABLE
                 return _botAudioMuted;
-#else
-                return false;
-#endif
             }
         }
 
@@ -710,7 +647,6 @@ namespace Estuary
         /// <returns>True if this audio should be played, false if it should be discarded</returns>
         public bool NotifyAudioChunk(string messageId, float timestamp = 0f)
         {
-#if LIVEKIT_AVAILABLE
             if (string.IsNullOrEmpty(messageId))
                 return false;
 
@@ -763,9 +699,6 @@ namespace Estuary
             }
 
             return true;  // Audio should be played
-#else
-            return false;
-#endif
         }
 
         /// <summary>
@@ -790,7 +723,6 @@ namespace Estuary
 
         #region Private Methods
 
-#if LIVEKIT_AVAILABLE
         private void SetupRoomEventHandlers()
         {
             if (_room == null) return;
@@ -812,25 +744,38 @@ namespace Estuary
                 Log($"Track subscribed from {participant.Identity}");
                 // Store bot's audio track for muting during interrupts
                 // Check if it's an audio track from the bot participant
-                var isAudioTrack = track is RemoteAudioTrack;
                 var isFromBot = participant.Identity != null && participant.Identity.StartsWith("bot-");
                 
-                if (isAudioTrack && isFromBot)
+                if (track is RemoteAudioTrack audioTrack && isFromBot)
                 {
                     _botAudioTrack = track;
                     _botAudioPublication = publication;
                     _botAudioMuted = false;
                     Log($"Bot audio track stored for interrupt handling");
                     
-                    // Configure the LiveKit AudioSource for better buffering
-                    // This runs after a short delay to allow LiveKit to create its AudioSource
-                    if (_coroutineRunner != null)
+                    // Clean up any existing audio stream
+                    CleanupBotAudioStream();
+                    
+                    // Create a new GameObject with AudioSource for bot audio playback
+                    _botAudioGameObject = new GameObject($"LiveKit_BotAudio_{participant.Identity}");
+                    _botAudioSource = _botAudioGameObject.AddComponent<AudioSource>();
+                    _botAudioSource.spatialBlend = 0f;  // 2D audio (no positional audio for voice)
+                    _botAudioSource.volume = 1f;
+                    _botAudioSource.priority = 0;  // Highest priority for voice
+                    _botAudioSource.dopplerLevel = 0f;  // No doppler effect for voice
+                    
+                    // Create AudioStream to play the remote audio track
+                    // This is required by LiveKit SDK - it does NOT auto-play remote audio
+                    try
                     {
-                        _coroutineRunner.StartCoroutine(ConfigureLiveKitAudioSourceCoroutine(participant.Identity));
+                        _botAudioStream = new AudioStream(audioTrack, _botAudioSource);
+                        Log($"Bot audio stream created and playing via AudioSource");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        LogError($"Failed to create AudioStream for bot audio: {ex.Message}");
                     }
                 }
-                // Audio from remote participants (bot) is automatically played by LiveKit
-                // The SDK handles audio playback through Unity's audio system
             };
 
             _room.TrackUnsubscribed += (track, publication, participant) =>
@@ -842,9 +787,14 @@ namespace Estuary
                 
                 if (isAudioTrack && isFromBot)
                 {
+                    // Clean up the audio stream and GameObject
+                    CleanupBotAudioStream();
+                    
                     _botAudioTrack = null;
                     _botAudioPublication = null;
                     _botAudioMuted = false;
+                    
+                    Log("Bot audio stream cleaned up");
                 }
             };
 
@@ -917,11 +867,37 @@ namespace Estuary
                 Log($"Configured {configuredCount} LiveKit AudioSource(s) for optimal voice playback");
             }
         }
-#endif
 
         private void DispatchToMainThread(Action action)
         {
             _mainThreadQueue.Enqueue(action);
+        }
+
+        /// <summary>
+        /// Clean up the bot audio stream and associated GameObjects.
+        /// </summary>
+        private void CleanupBotAudioStream()
+        {
+            if (_botAudioStream != null)
+            {
+                try
+                {
+                    _botAudioStream.Dispose();
+                }
+                catch (System.Exception ex)
+                {
+                    LogError($"Error disposing AudioStream: {ex.Message}");
+                }
+                _botAudioStream = null;
+            }
+            
+            if (_botAudioGameObject != null)
+            {
+                UnityEngine.Object.Destroy(_botAudioGameObject);
+                _botAudioGameObject = null;
+            }
+            
+            _botAudioSource = null;
         }
 
         private void Log(string message)
@@ -948,7 +924,9 @@ namespace Estuary
 
             _ = DisconnectAsync();
 
-#if LIVEKIT_AVAILABLE
+            // Clean up bot audio stream
+            CleanupBotAudioStream();
+
             // Stop and dispose microphone source (handles cleanup internally)
             if (_microphoneSource != null)
             {
@@ -959,7 +937,6 @@ namespace Estuary
             
             _localAudioTrack = null;
             _room = null;
-#endif
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             // Reset Android audio configuration

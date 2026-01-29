@@ -1,11 +1,8 @@
 using System;
 using System.Collections;
 using UnityEngine;
-
-#if LIVEKIT_AVAILABLE
 using LiveKit;
 using LiveKit.Proto;
-#endif
 
 namespace Estuary
 {

@@ -732,6 +732,23 @@ namespace Estuary
         {
             Log($"Bot voice: {voice}");
 
+            // In LiveKit mode, server sends metadata-only events (no audio data)
+            // Audio arrives via LiveKit WebRTC track automatically
+            if (voice.IsLiveKit)
+            {
+                Log($"LiveKit mode: tracking message_id={voice.MessageId}, audio via WebRTC");
+                // Just track the message_id for interrupt handling
+                _activeCharacter?.TrackMessageId(voice.MessageId);
+                
+                // Notify LiveKit manager to clear interrupt state and unmute audio for new messages
+                // This is critical for resuming audio after an interrupt
+                if (_liveKitManager != null && _liveKitManager.IsConnected && !string.IsNullOrEmpty(voice.MessageId))
+                {
+                    _liveKitManager.NotifyAudioChunk(voice.MessageId, voice.Timestamp);
+                }
+                return;
+            }
+
             // Notify LiveKit manager about new audio chunk for message tracking and timestamp filtering
             // This allows us to filter out audio chunks from interrupted messages or stale audio
             if (_liveKitManager != null && _liveKitManager.IsConnected && !string.IsNullOrEmpty(voice.MessageId))
@@ -744,9 +761,7 @@ namespace Estuary
                 }
             }
 
-            // Route to active character
-            // Note: In LiveKit mode, audio plays automatically through LiveKit SDK
-            // The bot_voice event is used for message_id tracking, not actual playback
+            // Route to active character for WebSocket audio playback
             _activeCharacter?.HandleBotVoice(voice);
         }
 

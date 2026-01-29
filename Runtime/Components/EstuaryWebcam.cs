@@ -87,10 +87,15 @@ namespace Estuary
         [Tooltip("Automatically subscribe to scene graph updates")]
         private bool autoSubscribeSceneGraph = true;
 
+        [Header("Auto-Start")]
+        [SerializeField]
+        [Tooltip("Automatically start streaming when EstuaryManager connects")]
+        private bool autoStartOnConnect = false;
+
         [Header("Debug")]
         [SerializeField]
         [Tooltip("Enable debug logging")]
-        private bool debugLogging = false;
+        private bool debugLogging = true; // Default to true for easier debugging
 
         [Header("Events")]
         [SerializeField]
@@ -180,11 +185,7 @@ namespace Estuary
         {
             get
             {
-#if LIVEKIT_AVAILABLE
                 return true;
-#else
-                return false;
-#endif
             }
         }
 
@@ -234,10 +235,32 @@ namespace Estuary
 
         #endregion
 
+        #region Editor Domain Reload Guard
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// Check if Unity Editor is still transitioning into play mode.
+        /// Returns true if we should wait before starting the webcam.
+        /// </summary>
+        private static bool IsEditorTransitioning()
+        {
+            // isPlayingOrWillChangePlaymode is true during transitions
+            // isPlaying is true only when fully in play mode
+            // If both are true but isCompiling is also true, we're still transitioning
+            return UnityEditor.EditorApplication.isCompiling ||
+                   (UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode && 
+                    !UnityEditor.EditorApplication.isPlaying);
+        }
+#endif
+
+        #endregion
+
         #region Unity Lifecycle
 
         private void Awake()
         {
+            Debug.Log("[EstuaryWebcam] Awake()");
+            
             // Pre-create frame texture for WebSocket mode
             _frameTexture = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
             
@@ -248,6 +271,162 @@ namespace Estuary
             _videoManager.OnError += HandleVideoManagerError;
         }
 
+        private void Start()
+        {
+            Debug.Log($"[EstuaryWebcam] Start() - autoStartOnConnect={autoStartOnConnect}");
+            
+            // If auto-start is enabled, subscribe to EstuaryManager connection events
+            if (autoStartOnConnect)
+            {
+                StartCoroutine(WaitForManagerAndAutoStart());
+            }
+        }
+
+        private System.Collections.IEnumerator WaitForManagerAndAutoStart()
+        {
+            Debug.Log("[EstuaryWebcam] Waiting for EstuaryManager...");
+            
+#if UNITY_EDITOR
+            // Wait for Unity Editor to finish transitioning into play mode
+            // This prevents webcam flickering during domain reload
+            float transitionTimeout = 10f;
+            float transitionElapsed = 0f;
+            while (IsEditorTransitioning() && transitionElapsed < transitionTimeout)
+            {
+                yield return new WaitForSeconds(0.1f);
+                transitionElapsed += 0.1f;
+            }
+            
+            if (transitionElapsed > 0)
+            {
+                Debug.Log($"[EstuaryWebcam] Editor transition complete after {transitionElapsed:F1}s");
+            }
+            
+            // Additional delay to let everything settle after play mode entry
+            yield return new WaitForSeconds(0.5f);
+#endif
+            
+            // Wait for EstuaryManager to exist
+            float timeout = 30f;
+            float elapsed = 0f;
+            while (!EstuaryManager.HasInstance && elapsed < timeout)
+            {
+                yield return new WaitForSeconds(0.5f);
+                elapsed += 0.5f;
+            }
+            
+            if (!EstuaryManager.HasInstance)
+            {
+                Debug.LogWarning("[EstuaryWebcam] Timeout waiting for EstuaryManager");
+                yield break;
+            }
+            
+            Debug.Log("[EstuaryWebcam] EstuaryManager found, subscribing to LiveKit state events...");
+            
+            // Subscribe to LiveKit state change events (we need LiveKit room for video)
+            EstuaryManager.Instance.OnLiveKitStateChanged += OnLiveKitStateChanged;
+            
+            // Check if already ready (in case we missed the event during startup)
+            var currentState = GetLiveKitState();
+            Debug.Log($"[EstuaryWebcam] Current LiveKit state: {currentState}");
+            if (currentState == LiveKitConnectionState.Ready)
+            {
+                Debug.Log("[EstuaryWebcam] Already connected to LiveKit (Ready state), starting streaming...");
+                OnLiveKitConnected();
+            }
+        }
+
+        private LiveKitConnectionState GetLiveKitState()
+        {
+            if (!EstuaryManager.HasInstance)
+                return LiveKitConnectionState.Disconnected;
+            
+            var managerType = typeof(EstuaryManager);
+            var stateField = managerType.GetField("_liveKitState",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            
+            if (stateField != null)
+            {
+                return (LiveKitConnectionState)stateField.GetValue(EstuaryManager.Instance);
+            }
+            
+            return LiveKitConnectionState.Disconnected;
+        }
+
+        private void OnLiveKitStateChanged(LiveKitConnectionState state)
+        {
+            Debug.Log($"[EstuaryWebcam] OnLiveKitStateChanged: {state}");
+            
+            // LiveKit is ready when state is Ready (not Connected - that enum value doesn't exist)
+            if (state == LiveKitConnectionState.Ready)
+            {
+                Debug.Log("[EstuaryWebcam] LiveKit is Ready, triggering OnLiveKitConnected");
+                OnLiveKitConnected();
+            }
+            else if (state == LiveKitConnectionState.Disconnected)
+            {
+                OnLiveKitDisconnected();
+            }
+        }
+
+        private void OnLiveKitConnected()
+        {
+            Debug.Log("[EstuaryWebcam] OnLiveKitConnected - attempting to start streaming");
+            
+            if (IsStreaming)
+            {
+                Debug.Log("[EstuaryWebcam] Already streaming, skipping");
+                return;
+            }
+            
+            // Get session ID from manager
+            string sessionId = GetSessionIdFromManager();
+            
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                Debug.Log($"[EstuaryWebcam] Starting streaming with sessionId={sessionId}");
+                StartStreaming(sessionId);
+            }
+            else
+            {
+                Debug.LogWarning("[EstuaryWebcam] No session ID available from manager");
+            }
+        }
+
+        private void OnLiveKitDisconnected()
+        {
+            Debug.Log("[EstuaryWebcam] OnLiveKitDisconnected - stopping streaming");
+            StopStreaming();
+        }
+
+        private string GetSessionIdFromManager()
+        {
+            if (!EstuaryManager.HasInstance)
+                return null;
+            
+            // Try to get active character via reflection
+            var managerType = typeof(EstuaryManager);
+            var activeCharField = managerType.GetField("_activeCharacter",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            
+            if (activeCharField != null)
+            {
+                var activeChar = activeCharField.GetValue(EstuaryManager.Instance) as EstuaryCharacter;
+                if (activeChar != null)
+                {
+                    // Use character + player ID to create a unique session ID for webcam
+                    string sessionId = $"webcam_{activeChar.CharacterId}_{activeChar.PlayerId}";
+                    Debug.Log($"[EstuaryWebcam] Generated session ID from active character: {sessionId}");
+                    return sessionId;
+                }
+            }
+            
+            // Fallback: generate a random session ID
+            string fallbackId = $"webcam_{System.Guid.NewGuid():N}";
+            Debug.Log($"[EstuaryWebcam] Generated fallback session ID: {fallbackId}");
+            return fallbackId;
+        }
+
         private void Update()
         {
             // Process video manager queue
@@ -256,6 +435,16 @@ namespace Estuary
 
         private void OnDestroy()
         {
+            Debug.Log("[EstuaryWebcam] OnDestroy()");
+            
+            // Unsubscribe from manager events - get instance once to avoid race condition
+            // where HasInstance is true but Instance returns null during shutdown
+            var manager = EstuaryManager.HasInstance ? EstuaryManager.Instance : null;
+            if (manager != null)
+            {
+                manager.OnLiveKitStateChanged -= OnLiveKitStateChanged;
+            }
+            
             StopStreaming();
             
             if (_frameTexture != null)
@@ -271,6 +460,37 @@ namespace Estuary
             }
         }
 
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            // Only pause webcam when focus is lost in actual builds, not in the Editor
+            // This prevents the webcam from stopping when clicking on Console, Inspector, etc.
+#if !UNITY_EDITOR
+            if (!IsStreaming) return;
+            
+            var webcam = WebcamTexture;
+            if (webcam == null) return;
+            
+            if (hasFocus)
+            {
+                // Resume webcam capture when focus is regained
+                if (!webcam.isPlaying)
+                {
+                    Log("[EstuaryWebcam] Resuming webcam (focus regained)");
+                    webcam.Play();
+                }
+            }
+            else
+            {
+                // Pause webcam capture when focus is lost
+                if (webcam.isPlaying)
+                {
+                    Log("[EstuaryWebcam] Pausing webcam (focus lost)");
+                    webcam.Stop();
+                }
+            }
+#endif
+        }
+
         #endregion
 
         #region Public Methods
@@ -281,30 +501,34 @@ namespace Estuary
         /// <param name="sessionId">World model session ID (use conversation session ID)</param>
         public void StartStreaming(string sessionId)
         {
+            Debug.Log($"[EstuaryWebcam] StartStreaming() called with sessionId={sessionId}");
+            
             if (IsStreaming)
             {
-                Log("[EstuaryWebcam] Already streaming");
+                Debug.Log("[EstuaryWebcam] Already streaming, returning");
                 return;
             }
 
             if (string.IsNullOrEmpty(sessionId))
             {
-                LogError("[EstuaryWebcam] Session ID is required");
+                Debug.LogError("[EstuaryWebcam] Session ID is required");
                 return;
             }
 
             SessionId = sessionId;
 
             // Get client reference
+            Debug.Log($"[EstuaryWebcam] EstuaryManager.HasInstance={EstuaryManager.HasInstance}");
             if (EstuaryManager.HasInstance)
             {
                 _client = GetClientFromManager();
                 _voiceManager = GetVoiceManagerFromManager();
+                Debug.Log($"[EstuaryWebcam] Got client={(_client != null)}, voiceManager={(_voiceManager != null)}");
             }
 
             if (_client == null)
             {
-                LogError("[EstuaryWebcam] EstuaryClient not available");
+                Debug.LogError("[EstuaryWebcam] EstuaryClient not available");
                 return;
             }
 
@@ -313,14 +537,17 @@ namespace Estuary
 
             // Determine which mode to use
             ActiveStreamMode = DetermineStreamMode();
+            Debug.Log($"[EstuaryWebcam] ActiveStreamMode={ActiveStreamMode}");
             
             // Start streaming based on active mode
             if (ActiveStreamMode == WebcamStreamMode.LiveKit)
             {
+                Debug.Log("[EstuaryWebcam] Starting LiveKit streaming...");
                 StartLiveKitStreaming();
             }
             else
             {
+                Debug.Log("[EstuaryWebcam] Starting WebSocket streaming...");
                 StartWebSocketStreaming();
             }
         }
@@ -365,16 +592,18 @@ namespace Estuary
         /// </summary>
         public async Task SubscribeToSceneGraphAsync()
         {
-            if (_client == null || string.IsNullOrEmpty(SessionId))
+            // Use effective session ID for backend communication (SDK session or local fallback)
+            var sessionId = GetEffectiveSessionId();
+            if (_client == null || string.IsNullOrEmpty(sessionId))
             {
                 LogError("[EstuaryWebcam] Cannot subscribe: not connected or no session");
                 return;
             }
 
-            var payload = new SceneGraphSubscribePayload(SessionId);
+            var payload = new SceneGraphSubscribePayload(sessionId);
             await EmitWorldModelEventAsync("scene_graph_subscribe", payload);
             _isSubscribedToSceneGraph = true;
-            Log("[EstuaryWebcam] Subscribed to scene graph updates");
+            Log($"[EstuaryWebcam] Subscribed to scene graph updates (session: {sessionId})");
         }
 
         /// <summary>
@@ -382,10 +611,15 @@ namespace Estuary
         /// </summary>
         public async Task UnsubscribeFromSceneGraphAsync()
         {
-            if (_client == null || string.IsNullOrEmpty(SessionId))
+            // Capture local references to avoid race condition during shutdown
+            var client = _client;
+            var sessionId = GetEffectiveSessionId();
+            
+            // Check if client is still valid and connected (may be disposed during shutdown)
+            if (client == null || !client.IsConnected || string.IsNullOrEmpty(sessionId))
                 return;
 
-            var payload = new SceneGraphSubscribePayload(SessionId);
+            var payload = new SceneGraphSubscribePayload(sessionId);
             await EmitWorldModelEventAsync("scene_graph_unsubscribe", payload);
             _isSubscribedToSceneGraph = false;
             Log("[EstuaryWebcam] Unsubscribed from scene graph updates");
@@ -433,7 +667,6 @@ namespace Estuary
             // If LiveKit mode requested
             if (streamMode == WebcamStreamMode.LiveKit)
             {
-#if LIVEKIT_AVAILABLE
                 // Check if voice manager is connected (we share the room)
                 if (_voiceManager != null && _voiceManager.IsConnected)
                 {
@@ -451,18 +684,6 @@ namespace Estuary
                     LogError("[EstuaryWebcam] LiveKit room not connected and autoFallback disabled");
                     return WebcamStreamMode.LiveKit; // Will fail on start
                 }
-#else
-                if (autoFallback)
-                {
-                    Log("[EstuaryWebcam] LiveKit SDK not available, falling back to WebSocket mode");
-                    return WebcamStreamMode.WebSocket;
-                }
-                else
-                {
-                    LogError("[EstuaryWebcam] LiveKit SDK not available and autoFallback disabled");
-                    return WebcamStreamMode.LiveKit; // Will fail on start
-                }
-#endif
             }
 
             return WebcamStreamMode.WebSocket;
@@ -474,7 +695,6 @@ namespace Estuary
 
         private async void StartLiveKitStreaming()
         {
-#if LIVEKIT_AVAILABLE
             try
             {
                 Log($"[EstuaryWebcam] Starting LiveKit video streaming at {targetWidth}x{targetHeight} @ {targetFps} FPS");
@@ -531,6 +751,9 @@ namespace Estuary
                 IsStreaming = true;
                 Log($"[EstuaryWebcam] LiveKit video streaming started");
 
+                // Notify backend to subscribe to LiveKit video track
+                await EnableLiveKitVideoOnBackendAsync();
+
                 // Auto-subscribe to scene graph
                 if (autoSubscribeSceneGraph)
                 {
@@ -556,14 +779,6 @@ namespace Estuary
                     onError?.Invoke($"LiveKit error: {e.Message}");
                 }
             }
-#else
-            LogError("[EstuaryWebcam] LiveKit SDK not available");
-            if (autoFallback)
-            {
-                ActiveStreamMode = WebcamStreamMode.WebSocket;
-                StartWebSocketStreaming();
-            }
-#endif
         }
 
         private async Task StopLiveKitStreamingAsync()
@@ -572,11 +787,62 @@ namespace Estuary
             {
                 await _videoManager.StopPublishingAsync();
             }
+
+            // Notify backend to stop listening to LiveKit video
+            await DisableLiveKitVideoOnBackendAsync();
+        }
+
+        /// <summary>
+        /// Notify backend to subscribe to LiveKit video track.
+        /// </summary>
+        private async Task EnableLiveKitVideoOnBackendAsync()
+        {
+            // Use effective session ID for backend communication (SDK session or local fallback)
+            var sessionId = GetEffectiveSessionId();
+            if (_client == null || string.IsNullOrEmpty(sessionId))
+            {
+                Log("[EstuaryWebcam] Cannot enable LiveKit video on backend: no client or session");
+                return;
+            }
+
+            try
+            {
+                // Use proper payload class for reliable JSON serialization
+                var payload = new EnableLiveKitVideoPayload(sessionId, targetFps);
+                await EmitWorldModelEventAsync("enable_livekit_video", payload);
+                Log($"[EstuaryWebcam] Enabled LiveKit video on backend (session: {sessionId}, fps: {targetFps})");
+            }
+            catch (Exception e)
+            {
+                LogError($"[EstuaryWebcam] Failed to enable LiveKit video on backend: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Notify backend to stop listening to LiveKit video.
+        /// </summary>
+        private async Task DisableLiveKitVideoOnBackendAsync()
+        {
+            // Capture local reference to avoid race condition during shutdown
+            var client = _client;
+            
+            // Check if client is still valid and connected (may be disposed during shutdown)
+            if (client == null || !client.IsConnected)
+                return;
+
+            try
+            {
+                await EmitWorldModelEventAsync("disable_livekit_video", new { });
+                Log("[EstuaryWebcam] Disabled LiveKit video on backend");
+            }
+            catch (Exception e)
+            {
+                LogError($"[EstuaryWebcam] Failed to disable LiveKit video on backend: {e.Message}");
+            }
         }
 
         private object GetLiveKitRoom()
         {
-#if LIVEKIT_AVAILABLE
             // Access the room from voice manager via reflection
             if (_voiceManager == null)
                 return null;
@@ -589,7 +855,7 @@ namespace Estuary
             {
                 return roomField.GetValue(_voiceManager);
             }
-#endif
+
             return null;
         }
 
@@ -773,6 +1039,16 @@ namespace Estuary
             return null;
         }
 
+        /// <summary>
+        /// Gets the effective session ID for backend communication.
+        /// Prefers the SDK session ID from the connected client, falls back to local SessionId.
+        /// </summary>
+        private string GetEffectiveSessionId()
+        {
+            // Prefer SDK session ID if available, otherwise fall back to local SessionId
+            return _client?.CurrentSession?.SessionId ?? SessionId;
+        }
+
         private void RegisterWorldModelHandlers()
         {
             if (_client == null)
@@ -812,15 +1088,29 @@ namespace Estuary
 
         private async Task EmitWorldModelEventAsync(string eventName, object payload)
         {
-            if (_client == null)
+            // Capture local reference to avoid race condition during shutdown
+            var client = _client;
+            
+            // Check if client is still valid and connected (may be disposed during shutdown)
+            if (client == null || !client.IsConnected)
             {
-                Log($"[EstuaryWebcam] Cannot emit {eventName}: client not available");
+                Log($"[EstuaryWebcam] Cannot emit {eventName}: client not available or disconnected");
                 return;
             }
 
             try
             {
-                await _client.EmitAsync(eventName, payload);
+                await client.EmitAsync(eventName, payload);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Client was disposed during await, this is expected during shutdown
+                Log($"[EstuaryWebcam] Client disposed during {eventName} emit (shutdown)");
+            }
+            catch (NullReferenceException)
+            {
+                // Race condition where client state changed during await
+                Log($"[EstuaryWebcam] Client became null during {eventName} emit (shutdown)");
             }
             catch (Exception e)
             {
@@ -830,8 +1120,13 @@ namespace Estuary
 
         internal void HandleSceneGraphUpdate(SceneGraphUpdate update)
         {
-            if (update.SessionId != SessionId)
+            // Accept updates for effective session ID (SDK session or local fallback)
+            var sessionId = GetEffectiveSessionId();
+            if (update.SessionId != sessionId)
+            {
+                Log($"[EstuaryWebcam] Ignoring scene graph update for different session: {update.SessionId} (expected: {sessionId})");
                 return;
+            }
 
             CurrentSceneGraph = update.SceneGraph;
             Log($"[EstuaryWebcam] Scene graph updated: {CurrentSceneGraph?.EntityCount ?? 0} entities");
@@ -842,7 +1137,9 @@ namespace Estuary
 
         internal void HandleRoomIdentified(RoomIdentified room)
         {
-            if (room.SessionId != SessionId)
+            // Accept updates for effective session ID (SDK session or local fallback)
+            var sessionId = GetEffectiveSessionId();
+            if (room.SessionId != sessionId)
                 return;
 
             CurrentRoomName = room.RoomName;

@@ -201,10 +201,14 @@ namespace Estuary
 
         private void OnApplicationPause(bool pauseStatus)
         {
+            // Only stop recording on pause in actual builds, not in the Editor
+            // This prevents the mic from stopping when clicking on Console, Inspector, etc.
+#if !UNITY_EDITOR
             if (pauseStatus && IsRecording)
             {
                 StopRecording();
             }
+#endif
         }
 
         #endregion

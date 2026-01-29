@@ -1,10 +1,7 @@
 using System;
 using System.Collections;
 using UnityEngine;
-
-#if LIVEKIT_AVAILABLE
 using LiveKit;
-#endif
 
 namespace Estuary
 {
@@ -58,7 +55,6 @@ namespace Estuary
     /// This was intended to provide access to VOICE_RECOGNITION audio source for
     /// near-field voice capture with ambient noise rejection.
     /// </summary>
-#if LIVEKIT_AVAILABLE
     [Obsolete("AndroidMicrophoneSource does not work due to Unity JNI array marshalling limitations. Use DirectMicrophoneSource instead.")]
     public sealed class AndroidMicrophoneSource : RtcAudioSource
     {
@@ -392,5 +388,4 @@ namespace Estuary
             Dispose(false);
         }
     }
-#endif
 }

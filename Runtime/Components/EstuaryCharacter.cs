@@ -594,6 +594,20 @@ namespace Estuary
             onVoiceReceived?.Invoke(voice);
         }
 
+        /// <summary>
+        /// Track message ID for interrupt handling in LiveKit mode.
+        /// In LiveKit mode, audio plays via WebRTC track, but we still need
+        /// to track message_id for interrupt filtering.
+        /// </summary>
+        /// <param name="messageId">Message ID from the bot_voice metadata event</param>
+        internal void TrackMessageId(string messageId)
+        {
+            if (!string.IsNullOrEmpty(messageId))
+            {
+                CurrentMessageId = messageId;
+            }
+        }
+
         internal void HandleSttResponse(SttResponse response)
         {
             // Invoke events

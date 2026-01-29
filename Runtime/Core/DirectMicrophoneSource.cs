@@ -1,10 +1,7 @@
 using System;
 using System.Collections;
 using UnityEngine;
-
-#if LIVEKIT_AVAILABLE
 using LiveKit;
-#endif
 
 namespace Estuary
 {
@@ -22,7 +19,6 @@ namespace Estuary
     /// - AEC (Acoustic Echo Cancellation) is still enabled via native WebRTC
     /// - AGC (Auto Gain Control) is still enabled
     /// </summary>
-#if LIVEKIT_AVAILABLE
     public sealed class DirectMicrophoneSource : RtcAudioSource
     {
         private const int SAMPLE_RATE = 48000;
@@ -41,7 +37,7 @@ namespace Estuary
         
         // VAD (Voice Activity Detection) settings
         private bool _vadEnabled = true;
-        private float _vadThreshold = 0.015f; // RMS threshold - tuned for near-field AR glasses
+        private float _vadThreshold = 0.010f; // RMS threshold - tuned for near-field AR glasses
         private float _currentVolume;
         private bool _wasSpeaking;
         
@@ -406,7 +402,6 @@ namespace Estuary
             Dispose(false);
         }
     }
-#endif
 }
 
 

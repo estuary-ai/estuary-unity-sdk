@@ -123,8 +123,11 @@ namespace Estuary
 
         // Ring buffer for continuous audio streaming (fixes audio gaps)
         private const int RING_BUFFER_SECONDS = 3;
-        private const float MIN_BUFFER_BEFORE_PLAY = 0.15f; // 150ms pre-buffer before starting playback
+        private const float MIN_BUFFER_BEFORE_PLAY = 0.25f; // 250ms pre-buffer before starting playback (increased to reduce underruns)
         private const float BUFFER_LOW_THRESHOLD = 0.05f; // 50ms - consider underrun if below this
+        private const float FADE_OUT_MS = 10f; // 10ms fade, smooth transition to silence on underrun
+        private int _fadeOutSamples; // Calculated based on actual sample rate (FADE_OUT_MS * sampleRate / 1000)
+        private bool _hasLoggedResample; // Track if we've logged about resampling (to avoid spam)
         private float[] _ringBuffer;
         private int _ringBufferSize;
         private int _writePosition;
@@ -450,6 +453,12 @@ namespace Estuary
 
         private void InitializeLiveKitBuffer()
         {
+            // Use expected sample rate for buffer (incoming audio will be resampled if needed)
+            _liveKitSampleRate = expectedSampleRate;
+
+            // Calculate fade-out samples based on actual sample rate (10ms fade)
+            _fadeOutSamples = (int)(_liveKitSampleRate * FADE_OUT_MS / 1000f);
+
             // Create ring buffer for continuous audio streaming
             // Buffer size = sample rate * channels * seconds
             _ringBufferSize = _liveKitSampleRate * _liveKitChannels * RING_BUFFER_SECONDS;
@@ -460,8 +469,9 @@ namespace Estuary
             _isStreamingActive = false;
             _hasStartedPlaying = false;
             _streamingClipPlaying = false;
+            _hasLoggedResample = false;
 
-            Debug.Log($"[EstuaryAudioSource] Initialized ring buffer: {_ringBufferSize} samples ({RING_BUFFER_SECONDS}s at {_liveKitSampleRate}Hz)");
+            Debug.Log($"[EstuaryAudioSource] Initialized ring buffer: {_ringBufferSize} samples ({RING_BUFFER_SECONDS}s at {_liveKitSampleRate}Hz), fade-out: {_fadeOutSamples} samples ({FADE_OUT_MS}ms)");
         }
 
         private void CleanupLiveKitBuffer()
@@ -529,11 +539,12 @@ namespace Estuary
             if (!_useLiveKit || pcmData == null || pcmData.Length == 0)
                 return;
 
-            // Update sample rate and channels if different - reinitialize buffer
-            if (sampleRate != _liveKitSampleRate || channels != _liveKitChannels)
+            // Only reinitialize buffer if channels change (sample rate handled via resampling)
+            if (channels != _liveKitChannels)
             {
-                _liveKitSampleRate = sampleRate;
                 _liveKitChannels = channels;
+                // Use expected sample rate for buffer, not incoming rate (we'll resample)
+                _liveKitSampleRate = expectedSampleRate;
                 InitializeLiveKitBuffer();
             }
 
@@ -541,6 +552,18 @@ namespace Estuary
             var samples = AudioConverter.PCM16ToFloat(pcmData);
             if (samples.Length == 0)
                 return;
+
+            // Resample if incoming audio is at a different rate than expected
+            // This prevents playback speed issues and maintains consistent buffer timing
+            if (sampleRate != expectedSampleRate)
+            {
+                if (!_hasLoggedResample)
+                {
+                    Debug.Log($"[EstuaryAudioSource] Resampling audio from {sampleRate}Hz to {expectedSampleRate}Hz");
+                    _hasLoggedResample = true;
+                }
+                samples = AudioConverter.Resample(samples, sampleRate, expectedSampleRate);
+            }
 
             // Write samples to ring buffer
             lock (_liveKitLock)
@@ -633,6 +656,11 @@ namespace Estuary
             }
 
             // Monitor buffer and detect end of stream
+            int bufferLogCounter = 0;
+            const int bufferLogInterval = 20; // Log every ~1 second (20 * 0.05s)
+            int lowBufferWarnings = 0;
+            int lowBufferThresholdSamples = (int)(_liveKitSampleRate * _liveKitChannels * BUFFER_LOW_THRESHOLD);
+            
             while (_isStreamingActive && _streamingClipPlaying)
             {
                 int available;
@@ -655,6 +683,24 @@ namespace Estuary
                 else
                 {
                     emptyBufferTime = 0f;
+                    
+                    // Warn if buffer is running low (potential underrun)
+                    if (available < lowBufferThresholdSamples)
+                    {
+                        lowBufferWarnings++;
+                        float bufferMs = (float)available / _liveKitSampleRate / _liveKitChannels * 1000;
+                        Debug.LogWarning($"[EstuaryAudioSource] Buffer low: {bufferMs:F0}ms remaining (threshold: {BUFFER_LOW_THRESHOLD * 1000:F0}ms)");
+                    }
+                }
+
+                // Periodic buffer health log
+                bufferLogCounter++;
+                if (bufferLogCounter >= bufferLogInterval)
+                {
+                    bufferLogCounter = 0;
+                    float fillPercent = (float)available / _ringBufferSize * 100;
+                    float bufferMs = (float)available / _liveKitSampleRate / _liveKitChannels * 1000;
+                    Debug.Log($"[EstuaryAudioSource] Buffer health: {fillPercent:F1}% ({bufferMs:F0}ms), low warnings: {lowBufferWarnings}");
                 }
 
                 yield return new WaitForSeconds(0.05f);
@@ -694,6 +740,7 @@ namespace Estuary
         /// <summary>
         /// PCM reader callback for streaming AudioClip.
         /// Called by Unity's audio thread to fill the playback buffer.
+        /// Implements smooth fade-out on buffer underrun to avoid clicks/pops.
         /// </summary>
         private void OnAudioRead(float[] data)
         {
@@ -707,16 +754,34 @@ namespace Estuary
                 }
 
                 int samplesToRead = Math.Min(data.Length, _samplesAvailable);
-                
+
+                // Check if we're about to underrun (not enough samples to fill the request)
+                bool isUnderrun = samplesToRead < data.Length;
+
+                // Calculate fade-out region: apply fade to last _fadeOutSamples of available audio
+                int fadeOutSamples = _fadeOutSamples > 0 ? _fadeOutSamples : 240; // Fallback to 10ms at 24kHz
+                int fadeStartIndex = isUnderrun ? Math.Max(0, samplesToRead - fadeOutSamples) : -1;
+
                 for (int i = 0; i < samplesToRead; i++)
                 {
-                    data[i] = _ringBuffer[_readPosition];
+                    float sample = _ringBuffer[_readPosition];
                     _readPosition = (_readPosition + 1) % _ringBufferSize;
+
+                    // Apply fade-out if we're in the underrun fade region
+                    if (fadeStartIndex >= 0 && i >= fadeStartIndex)
+                    {
+                        // Linear fade from 1.0 to 0.0 over the fade region
+                        float fadeProgress = (float)(i - fadeStartIndex) / fadeOutSamples;
+                        float fadeMultiplier = 1.0f - fadeProgress;
+                        sample *= fadeMultiplier;
+                    }
+
+                    data[i] = sample;
                 }
                 
                 _samplesAvailable -= samplesToRead;
 
-                // Fill remaining with silence (buffer underrun)
+                // Fill remaining with silence (after fade-out, so no click)
                 if (samplesToRead < data.Length)
                 {
                     Array.Clear(data, samplesToRead, data.Length - samplesToRead);

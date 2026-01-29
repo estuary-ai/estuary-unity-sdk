@@ -3,11 +3,8 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using UnityEngine;
-
-#if LIVEKIT_AVAILABLE
 using LiveKit;
 using LiveKit.Proto;
-#endif
 
 namespace Estuary
 {
@@ -46,9 +43,9 @@ namespace Estuary
         public bool IsPublishing { get; private set; }
 
         /// <summary>
-        /// Current webcam texture (for preview, only available if using WebcamVideoSource).
+        /// Current webcam texture (for preview).
         /// </summary>
-        public WebCamTexture WebcamTexture => _webcamSource?.WebcamTexture;
+        public WebCamTexture WebcamTexture => _videoSource?.WebcamTexture;
 
         /// <summary>
         /// Target video width.
@@ -84,11 +81,9 @@ namespace Estuary
 
         #region Private Fields
 
-#if LIVEKIT_AVAILABLE
         private Room _room;
         private LocalVideoTrack _localVideoTrack;
-#endif
-        private WebcamVideoSource _webcamSource;
+        private DirectWebcamVideoSource _videoSource;
         private bool _disposed;
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
         private MonoBehaviour _coroutineRunner;
@@ -133,7 +128,6 @@ namespace Estuary
                 return true;
             }
 
-#if LIVEKIT_AVAILABLE
             _room = room as Room;
             if (_room == null)
             {
@@ -165,27 +159,16 @@ namespace Estuary
                 DispatchToMainThread(() => OnError?.Invoke($"Failed to enable video: {e.Message}"));
                 return false;
             }
-#else
-            LogError("LiveKit SDK not available");
-            return false;
-#endif
         }
 
-#if LIVEKIT_AVAILABLE
         private IEnumerator StartPublishingCoroutine()
         {
+            Debug.Log("[LiveKitVideoManager] StartPublishingCoroutine() entered");
             Log("Starting video track publishing...");
 
-            // Note: Video publishing requires creating a video source that implements LiveKit's
-            // RtcVideoSource interface. This is more complex than audio since LiveKit's Unity SDK
-            // doesn't provide a simple built-in camera source like SetCameraEnabled().
-            // 
-            // For now, we create a webcam source for local preview/processing,
-            // but full LiveKit video track publishing would require implementing
-            // a custom RtcVideoSource or using LiveKit's native camera capture if available.
-
-            // Create webcam video source for local capture/preview
-            _webcamSource = new WebcamVideoSource(
+            // Create DirectWebcamVideoSource which wraps TextureVideoSource for LiveKit publishing
+            Debug.Log($"[LiveKitVideoManager] Creating DirectWebcamVideoSource: {TargetWidth}x{TargetHeight} @ {TargetFps}fps");
+            _videoSource = new DirectWebcamVideoSource(
                 _coroutineRunner,
                 deviceName: string.IsNullOrEmpty(PreferredDevice) ? null : PreferredDevice,
                 useFrontCamera: UseFrontCamera,
@@ -194,37 +177,72 @@ namespace Estuary
                 fps: TargetFps
             );
 
-            // Start webcam capture
-            _webcamSource.Start();
+            // Start capturing first so VideoSource is initialized
+            Debug.Log("[LiveKitVideoManager] Calling _videoSource.Start()");
+            _videoSource.Start();
 
-            // Wait a frame for webcam to initialize
-            yield return null;
-
-            if (!_webcamSource.IsCapturing)
+            // Wait for webcam and VideoSource to initialize
+            Debug.Log("[LiveKitVideoManager] Waiting for VideoSource to initialize...");
+            float timeout = 3f;
+            float elapsed = 0f;
+            while ((_videoSource.VideoSource == null || !_videoSource.IsCapturing) && elapsed < timeout)
             {
-                LogError("Failed to start webcam capture");
-                _webcamSource?.Stop();
-                _webcamSource?.Dispose();
-                _webcamSource = null;
+                yield return new WaitForSeconds(0.1f);
+                elapsed += 0.1f;
+                if (elapsed % 1f < 0.15f) // Log every ~1 second
+                {
+                    Debug.Log($"[LiveKitVideoManager] Waiting... elapsed={elapsed:F1}s, VideoSource={(_videoSource.VideoSource != null ? "created" : "null")}, IsCapturing={_videoSource.IsCapturing}");
+                }
+            }
+
+            Debug.Log($"[LiveKitVideoManager] Wait complete. VideoSource={(_videoSource.VideoSource != null ? "created" : "null")}, IsCapturing={_videoSource.IsCapturing}");
+
+            if (_videoSource.VideoSource == null || !_videoSource.IsCapturing)
+            {
+                LogError($"Failed to start webcam capture - VideoSource={(_videoSource.VideoSource != null ? "created" : "null")}, IsCapturing={_videoSource.IsCapturing}");
+                _videoSource?.Stop();
+                _videoSource?.Dispose();
+                _videoSource = null;
                 _publishTcs?.TrySetResult(false);
                 DispatchToMainThread(() => OnError?.Invoke("Failed to start webcam"));
                 yield break;
             }
 
-            // TODO: To publish video to LiveKit, implement a custom RtcVideoSource that
-            // feeds frames from WebcamVideoSource to LiveKit's video pipeline.
-            // For now, we just capture locally which can be used for preview or
-            // manual frame processing (e.g., sending to a vision API).
-            
-            Log($"Webcam capture started: {_webcamSource.Width}x{_webcamSource.Height}");
-            Log("Note: Full LiveKit video track publishing requires RtcVideoSource implementation");
+            // Create local video track from the TextureVideoSource
+            Debug.Log("[LiveKitVideoManager] Creating LocalVideoTrack from TextureVideoSource");
+            _localVideoTrack = LocalVideoTrack.CreateVideoTrack("camera", _videoSource.VideoSource, _room);
+
+            // Configure video encoding options
+            var options = new TrackPublishOptions();
+            options.VideoEncoding = new VideoEncoding();
+            options.VideoEncoding.MaxBitrate = 1_500_000; // 1.5 Mbps
+            options.VideoEncoding.MaxFramerate = (uint)TargetFps;
+            options.Source = TrackSource.SourceCamera;
+
+            // Publish the video track to the room
+            Log($"Publishing video track: {TargetWidth}x{TargetHeight} @ {TargetFps}fps");
+            var publishInstruction = _room.LocalParticipant.PublishTrack(_localVideoTrack, options);
+            yield return publishInstruction;
+
+            if (publishInstruction.IsError)
+            {
+                LogError("Failed to publish video track");
+                _videoSource?.Stop();
+                _videoSource?.Dispose();
+                _videoSource = null;
+                _localVideoTrack = null;
+                _publishTcs?.TrySetResult(false);
+                DispatchToMainThread(() => OnError?.Invoke("Failed to publish video track"));
+                yield break;
+            }
+
+            Log($"Video publishing started: {_videoSource.Width}x{_videoSource.Height} @ {TargetFps}fps");
 
             IsPublishing = true;
             
             _publishTcs?.TrySetResult(true);
             DispatchToMainThread(() => OnPublishingStarted?.Invoke());
         }
-#endif
 
         /// <summary>
         /// Stop publishing video.
@@ -237,22 +255,24 @@ namespace Estuary
                 return;
             }
 
-#if LIVEKIT_AVAILABLE
             try
             {
                 Log("Stopping video publishing...");
 
-                // Stop webcam source if we created one
-                if (_webcamSource != null)
+                // Unpublish video track if we have one
+                if (_localVideoTrack != null && _room?.LocalParticipant != null)
                 {
-                    _webcamSource.Stop();
-                    _webcamSource.Dispose();
-                    _webcamSource = null;
+                    _room.LocalParticipant.UnpublishTrack(_localVideoTrack, true);
+                    _localVideoTrack = null;
                 }
 
-                // Unpublish video track if we had one
-                // Note: Currently we only do local capture, not LiveKit publishing
-                _localVideoTrack = null;
+                // Stop video source
+                if (_videoSource != null)
+                {
+                    _videoSource.Stop();
+                    _videoSource.Dispose();
+                    _videoSource = null;
+                }
 
                 _room = null;
                 IsPublishing = false;
@@ -263,14 +283,14 @@ namespace Estuary
             {
                 LogError($"Error stopping video: {e.Message}");
             }
-#endif
+
             await Task.CompletedTask;
         }
 
 
         /// <summary>
         /// Update video settings while publishing.
-        /// Note: Changing settings requires stop/start to take effect.
+        /// Note: Changing resolution requires stop/start to take effect.
         /// </summary>
         public void UpdateSettings(int width, int height, int fps)
         {
@@ -278,31 +298,20 @@ namespace Estuary
             TargetHeight = height;
             TargetFps = fps;
 
-            if (_webcamSource != null)
+            if (_videoSource != null)
             {
-                _webcamSource.SetResolution(width, height);
-                _webcamSource.SetFrameRate(fps);
+                _videoSource.SetResolution(width, height);
+                _videoSource.SetFrameRate(fps);
             }
         }
 
         /// <summary>
-        /// Get or create a WebcamVideoSource for manual frame access.
-        /// This is useful if you need to process frames locally (e.g., for preview).
+        /// Get the current video source.
+        /// Returns null if not currently publishing.
         /// </summary>
-        public WebcamVideoSource GetOrCreateWebcamSource()
+        public DirectWebcamVideoSource GetVideoSource()
         {
-            if (_webcamSource == null && _coroutineRunner != null)
-            {
-                _webcamSource = new WebcamVideoSource(
-                    _coroutineRunner,
-                    deviceName: string.IsNullOrEmpty(PreferredDevice) ? null : PreferredDevice,
-                    useFrontCamera: UseFrontCamera,
-                    width: TargetWidth,
-                    height: TargetHeight,
-                    fps: TargetFps
-                );
-            }
-            return _webcamSource;
+            return _videoSource;
         }
 
         /// <summary>
@@ -334,7 +343,8 @@ namespace Estuary
 
         private void Log(string message)
         {
-            if (DebugLogging)
+            // Always log video manager messages for debugging
+            // if (DebugLogging)
             {
                 Debug.Log($"[LiveKitVideoManager] {message}");
             }
@@ -356,17 +366,15 @@ namespace Estuary
 
             _ = StopPublishingAsync();
 
-            if (_webcamSource != null)
+            if (_videoSource != null)
             {
-                _webcamSource.Stop();
-                _webcamSource.Dispose();
-                _webcamSource = null;
+                _videoSource.Stop();
+                _videoSource.Dispose();
+                _videoSource = null;
             }
 
-#if LIVEKIT_AVAILABLE
             _localVideoTrack = null;
             _room = null;
-#endif
         }
 
         #endregion

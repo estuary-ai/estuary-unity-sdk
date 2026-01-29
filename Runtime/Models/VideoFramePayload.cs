@@ -129,4 +129,29 @@ namespace Estuary.Models
             this.sessionId = sessionId;
         }
     }
+
+    /// <summary>
+    /// Payload for enabling LiveKit video on the backend.
+    /// </summary>
+    [Serializable]
+    public class EnableLiveKitVideoPayload
+    {
+        /// <summary>
+        /// Session ID for the world model session.
+        /// </summary>
+        public string sessionId;
+
+        /// <summary>
+        /// Target frames per second.
+        /// </summary>
+        public int targetFps;
+
+        public EnableLiveKitVideoPayload() { }
+
+        public EnableLiveKitVideoPayload(string sessionId, int targetFps)
+        {
+            this.sessionId = sessionId;
+            this.targetFps = targetFps;
+        }
+    }
 }

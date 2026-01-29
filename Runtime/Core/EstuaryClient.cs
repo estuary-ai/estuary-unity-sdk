@@ -933,7 +933,8 @@ namespace Estuary
             try
             {
                 var update = SceneGraphUpdate.FromJson(json);
-                Log($"Received scene graph update: {update.SceneGraph?.EntityCount ?? 0} entities");
+                // Always log scene graph updates (important for debugging world model)
+                Debug.Log($"[EstuaryClient] Received scene graph update: {update.SceneGraph?.EntityCount ?? 0} entities");
                 DispatchToMainThread(() => OnSceneGraphUpdate?.Invoke(update));
             }
             catch (Exception e)
