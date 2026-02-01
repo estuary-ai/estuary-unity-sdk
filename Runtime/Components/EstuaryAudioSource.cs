@@ -31,8 +31,8 @@ namespace Estuary
 
         [Header("Playback Settings")]
         [SerializeField]
-        [Tooltip("Expected sample rate from server (ElevenLabs default: 24000)")]
-        private int expectedSampleRate = 24000;
+        [Tooltip("Expected sample rate from server (16000 for optimized latency)")]
+        private int expectedSampleRate = 16000;
 
         [SerializeField]
         [Tooltip("Stop playback when user starts speaking")]
@@ -116,7 +116,7 @@ namespace Estuary
         // LiveKit mode fields
         private LiveKitVoiceManager _liveKitManager;
         private bool _useLiveKit;
-        private int _liveKitSampleRate = 24000;
+        private int _liveKitSampleRate = 16000;
         private int _liveKitChannels = 1;
         private Coroutine _liveKitPlaybackCoroutine;
         private readonly object _liveKitLock = new object();
@@ -759,7 +759,7 @@ namespace Estuary
                 bool isUnderrun = samplesToRead < data.Length;
 
                 // Calculate fade-out region: apply fade to last _fadeOutSamples of available audio
-                int fadeOutSamples = _fadeOutSamples > 0 ? _fadeOutSamples : 240; // Fallback to 10ms at 24kHz
+                int fadeOutSamples = _fadeOutSamples > 0 ? _fadeOutSamples : 160; // Fallback to 10ms at 16kHz
                 int fadeStartIndex = isUnderrun ? Math.Max(0, samplesToRead - fadeOutSamples) : -1;
 
                 for (int i = 0; i < samplesToRead; i++)

@@ -23,9 +23,9 @@ namespace Estuary.Models
         public string Audio => audio;
 
         /// <summary>
-        /// Sample rate of the audio (default: 24000 for ElevenLabs).
+        /// Sample rate of the audio (default: 16000 for optimized latency).
         /// </summary>
-        public int SampleRate => sampleRate > 0 ? sampleRate : 24000;
+        public int SampleRate => sampleRate > 0 ? sampleRate : 16000;
 
         /// <summary>
         /// Index of this chunk in a streaming response.
@@ -80,7 +80,7 @@ namespace Estuary.Models
 
         public BotVoice() { }
 
-        public BotVoice(string audio, int sampleRate = 24000, string messageId = null, int chunkIndex = 0, float timestamp = 0f)
+        public BotVoice(string audio, int sampleRate = 16000, string messageId = null, int chunkIndex = 0, float timestamp = 0f)
         {
             this.audio = audio;
             this.sampleRate = sampleRate;
@@ -109,7 +109,7 @@ namespace Estuary.Models
             return new BotVoice
             {
                 audio = response.audio,
-                sampleRate = response.sample_rate > 0 ? response.sample_rate : 24000,
+                sampleRate = response.sample_rate > 0 ? response.sample_rate : 16000,
                 chunkIndex = response.chunk_index,
                 messageId = response.message_id,
                 isInterjection = response.is_interjection,

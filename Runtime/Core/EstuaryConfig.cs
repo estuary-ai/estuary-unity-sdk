@@ -49,12 +49,12 @@ namespace Estuary
 
         [Header("Audio Settings")]
         [SerializeField]
-        [Tooltip("Sample rate for microphone recording (16000 for WebSocket STT, 48000 for LiveKit)")]
+        [Tooltip("Sample rate for microphone recording (16000 for both WebSocket and LiveKit)")]
         private int recordingSampleRate = 16000;
 
         [SerializeField]
-        [Tooltip("Expected sample rate for voice playback (ElevenLabs: 24000)")]
-        private int playbackSampleRate = 24000;
+        [Tooltip("Expected sample rate for voice playback (16000 for optimized latency)")]
+        private int playbackSampleRate = 16000;
 
         [SerializeField]
         [Tooltip("Duration of audio chunks to send (in milliseconds)")]
@@ -103,9 +103,9 @@ namespace Estuary
 
         /// <summary>
         /// Sample rate for microphone recording.
-        /// Returns 48000 for LiveKit mode (WebRTC standard), 16000 for WebSocket mode.
+        /// Returns 16000 for both LiveKit and WebSocket modes (optimized for STT and latency).
         /// </summary>
-        public int RecordingSampleRate => voiceMode == VoiceMode.LiveKit ? 48000 : recordingSampleRate;
+        public int RecordingSampleRate => voiceMode == VoiceMode.LiveKit ? 16000 : recordingSampleRate;
 
         /// <summary>
         /// Sample rate for voice playback.

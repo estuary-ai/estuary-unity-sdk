@@ -14,9 +14,9 @@ namespace Estuary.Utilities
         public const int DEFAULT_RECORD_SAMPLE_RATE = 16000;
 
         /// <summary>
-        /// Default sample rate for playback (ElevenLabs output).
+        /// Default sample rate for playback (optimized for latency).
         /// </summary>
-        public const int DEFAULT_PLAYBACK_SAMPLE_RATE = 24000;
+        public const int DEFAULT_PLAYBACK_SAMPLE_RATE = 16000;
 
         /// <summary>
         /// Convert Unity float samples (-1 to 1) to 16-bit PCM bytes.

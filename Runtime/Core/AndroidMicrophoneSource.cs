@@ -58,7 +58,7 @@ namespace Estuary
     [Obsolete("AndroidMicrophoneSource does not work due to Unity JNI array marshalling limitations. Use DirectMicrophoneSource instead.")]
     public sealed class AndroidMicrophoneSource : RtcAudioSource
     {
-        private const int SAMPLE_RATE = 48000;
+        private const int SAMPLE_RATE = 16000;
         private const int CHANNELS = 1; // Mono for voice, will be converted to stereo
         private const int BITS_PER_SAMPLE = 16;
         private const float POLL_INTERVAL_MS = 20f;

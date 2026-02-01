@@ -13,7 +13,7 @@ MonoBehaviour:
   m_Name: EstuaryConfig
   m_EditorClassIdentifier: 
   serverUrl: https://api.estuary-ai.com
-  apiKey: est_3wnwMibfa4mvpEIDOYLoSUVpnaPD-e3rwrBUT4srx1E
+  apiKey: est_C95KF0SDC1CjBAMnEoktDjJxrj0sgsuEuNCT-skYCms
   voiceMode: 1
   recordingSampleRate: 16000
   playbackSampleRate: 24000

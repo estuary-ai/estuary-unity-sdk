@@ -135,6 +135,11 @@ namespace Estuary
         /// </summary>
         public bool IsVoiceModeActive => _client?.IsVoiceModeActive ?? false;
 
+        /// <summary>
+        /// The character currently used for connection and messaging.
+        /// </summary>
+        public EstuaryCharacter ActiveCharacter => _activeCharacter;
+
         #endregion
 
         #region Events
@@ -158,6 +163,16 @@ namespace Estuary
         /// Fired when LiveKit room is ready (bot joined, audio flowing).
         /// </summary>
         public event Action<string> OnLiveKitReady;
+
+        /// <summary>
+        /// Fired when the active character changes (previous, current).
+        /// </summary>
+        public event Action<EstuaryCharacter, EstuaryCharacter> OnActiveCharacterChanged;
+
+        /// <summary>
+        /// Fired when bot audio source is created (for lip sync integration).
+        /// </summary>
+        public event Action<AudioSource> OnBotAudioSourceCreated;
 
         #endregion
 
@@ -334,7 +349,9 @@ namespace Estuary
             // If this was the active character, clear it
             if (_activeCharacter == character)
             {
+                var previous = _activeCharacter;
                 _activeCharacter = null;
+                OnActiveCharacterChanged?.Invoke(previous, null);
             }
         }
 
@@ -357,6 +374,8 @@ namespace Estuary
             _activeCharacter = character;
 
             Log($"Active character set to: {character.CharacterId}");
+
+            OnActiveCharacterChanged?.Invoke(previousCharacter, character);
 
             // Reconnect if needed
             if (wasConnected && previousCharacter != character)
@@ -635,6 +654,7 @@ namespace Estuary
             _liveKitManager.OnConnected += HandleLiveKitConnected;
             _liveKitManager.OnDisconnected += HandleLiveKitDisconnected;
             _liveKitManager.OnError += HandleLiveKitManagerError;
+            _liveKitManager.OnBotAudioSourceCreated += HandleBotAudioSourceCreated;
 
             Log("EstuaryManager initialized");
         }
@@ -647,6 +667,7 @@ namespace Estuary
                 _liveKitManager.OnConnected -= HandleLiveKitConnected;
                 _liveKitManager.OnDisconnected -= HandleLiveKitDisconnected;
                 _liveKitManager.OnError -= HandleLiveKitManagerError;
+                _liveKitManager.OnBotAudioSourceCreated -= HandleBotAudioSourceCreated;
                 _liveKitManager.Dispose();
                 _liveKitManager = null;
             }
@@ -872,6 +893,12 @@ namespace Estuary
         {
             Debug.LogError($"[EstuaryManager] LiveKit manager error: {error}");
             OnError?.Invoke($"LiveKit error: {error}");
+        }
+
+        private void HandleBotAudioSourceCreated(AudioSource audioSource)
+        {
+            Log("Bot audio source created, forwarding event");
+            OnBotAudioSourceCreated?.Invoke(audioSource);
         }
 
         private void SetLiveKitState(LiveKitConnectionState newState)

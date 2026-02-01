@@ -21,9 +21,18 @@ namespace Estuary
     /// </summary>
     public sealed class DirectMicrophoneSource : RtcAudioSource
     {
-        private const int SAMPLE_RATE = 48000;
-        private const int CHANNELS = 2; // Stereo for LiveKit
+        private const int SAMPLE_RATE = 16000;
+        private const int CHANNELS = 1; // Mono for voice (industry standard for conversational AI)
         private const float POLL_INTERVAL_MS = 20f; // Poll every 20ms for low latency
+        
+        // Static constructor to configure LiveKit's default sample rate BEFORE any instance is created
+        static DirectMicrophoneSource()
+        {
+            // Override LiveKit's default (48000) to match our target sample rate
+            RtcAudioSource.DefaultMicrophoneSampleRate = SAMPLE_RATE;
+            RtcAudioSource.DefaultChannels = CHANNELS;
+            UnityEngine.Debug.Log($"[DirectMicrophoneSource] Configured LiveKit defaults: {SAMPLE_RATE}Hz, {CHANNELS} channel(s)");
+        }
         
         private readonly string _deviceName;
         private readonly MonoBehaviour _coroutineRunner;
@@ -94,7 +103,7 @@ namespace Estuary
             _deviceName = deviceName;
             _coroutineRunner = coroutineRunner;
             
-            // Allocate buffer for ~20ms of audio at 48kHz stereo
+            // Allocate buffer for ~20ms of audio at 16kHz mono
             int samplesPerPoll = (int)(SAMPLE_RATE * (POLL_INTERVAL_MS / 1000f));
             _readBuffer = new float[samplesPerPoll * CHANNELS * 2]; // Extra space for variable timing
         }
@@ -282,8 +291,8 @@ namespace Estuary
                     _micClip.GetData(secondPart, 0);
                 }
                 
-                // Combine and convert to stereo if needed
-                ConvertToStereo(firstPart, secondPart, audioData, _micClip.channels);
+                // Copy to output buffer (mono)
+                CopyToOutput(firstPart, secondPart, audioData, _micClip.channels);
             }
             else
             {
@@ -291,8 +300,8 @@ namespace Estuary
                 float[] rawData = new float[samplesToRead * _micClip.channels];
                 _micClip.GetData(rawData, _lastReadPosition);
                 
-                // Convert to stereo if needed
-                ConvertToStereo(rawData, null, audioData, _micClip.channels);
+                // Copy to output buffer (mono)
+                CopyToOutput(rawData, null, audioData, _micClip.channels);
             }
             
             _lastReadPosition = currentPosition;
@@ -325,7 +334,7 @@ namespace Estuary
                 }
             }
             
-            // Fire the AudioRead event with the CORRECT sample rate (48000)
+            // Fire the AudioRead event with 16kHz mono
             // This goes to RtcAudioSource.OnAudioRead which sends to native FFI with AEC
             AudioRead?.Invoke(audioData, CHANNELS, SAMPLE_RATE);
         }
@@ -349,40 +358,44 @@ namespace Estuary
         }
         
         /// <summary>
-        /// Converts audio data to stereo format expected by LiveKit.
+        /// Copies audio data to the output buffer, handling mono/stereo conversion if needed.
+        /// Since we're using mono output (CHANNELS=1), we keep the data as-is for mono sources
+        /// or downmix stereo to mono.
         /// </summary>
-        private void ConvertToStereo(float[] firstPart, float[] secondPart, float[] output, int sourceChannels)
+        private void CopyToOutput(float[] firstPart, float[] secondPart, float[] output, int sourceChannels)
         {
             int outputIndex = 0;
             
-            // Process first part
             if (sourceChannels == 1)
             {
-                // Mono to stereo: duplicate each sample
-                for (int i = 0; i < firstPart.Length && outputIndex < output.Length - 1; i++)
+                // Source is mono, output is mono - direct copy
+                for (int i = 0; i < firstPart.Length && outputIndex < output.Length; i++)
                 {
-                    output[outputIndex++] = firstPart[i];
                     output[outputIndex++] = firstPart[i];
                 }
                 
                 if (secondPart != null)
                 {
-                    for (int i = 0; i < secondPart.Length && outputIndex < output.Length - 1; i++)
+                    for (int i = 0; i < secondPart.Length && outputIndex < output.Length; i++)
                     {
-                        output[outputIndex++] = secondPart[i];
                         output[outputIndex++] = secondPart[i];
                     }
                 }
             }
             else
             {
-                // Already stereo (or more), just copy
-                Array.Copy(firstPart, 0, output, 0, Math.Min(firstPart.Length, output.Length));
-                outputIndex = Math.Min(firstPart.Length, output.Length);
-                
-                if (secondPart != null && outputIndex < output.Length)
+                // Source is stereo, downmix to mono by averaging channels
+                for (int i = 0; i < firstPart.Length - 1 && outputIndex < output.Length; i += 2)
                 {
-                    Array.Copy(secondPart, 0, output, outputIndex, Math.Min(secondPart.Length, output.Length - outputIndex));
+                    output[outputIndex++] = (firstPart[i] + firstPart[i + 1]) * 0.5f;
+                }
+                
+                if (secondPart != null)
+                {
+                    for (int i = 0; i < secondPart.Length - 1 && outputIndex < output.Length; i += 2)
+                    {
+                        output[outputIndex++] = (secondPart[i] + secondPart[i + 1]) * 0.5f;
+                    }
                 }
             }
         }

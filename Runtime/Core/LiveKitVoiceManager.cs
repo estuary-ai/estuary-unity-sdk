@@ -74,6 +74,12 @@ namespace Estuary
         /// </summary>
         public event Action<bool> OnMuteStateChanged;
 
+        /// <summary>
+        /// Fired when the bot audio source is created at runtime.
+        /// Useful for integrating lip sync or other audio-reactive features.
+        /// </summary>
+        public event Action<AudioSource> OnBotAudioSourceCreated;
+
         #endregion
 
         #region Properties
@@ -770,6 +776,9 @@ namespace Estuary
                     {
                         _botAudioStream = new AudioStream(audioTrack, _botAudioSource);
                         Log($"Bot audio stream created and playing via AudioSource");
+                        
+                        // Notify listeners that bot audio source is ready (for lip sync, etc.)
+                        DispatchToMainThread(() => OnBotAudioSourceCreated?.Invoke(_botAudioSource));
                     }
                     catch (System.Exception ex)
                     {
