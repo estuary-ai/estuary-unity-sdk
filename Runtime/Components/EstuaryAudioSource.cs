@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Events;
@@ -11,7 +10,8 @@ namespace Estuary
 {
     /// <summary>
     /// Component for playing back Estuary voice responses.
-    /// Handles audio queuing, playback, and interruption.
+    /// Uses a ring buffer for smooth streaming playback in WebSocket mode.
+    /// In LiveKit mode, audio is handled automatically by LiveKit's AudioStream.
     /// </summary>
     [AddComponentMenu("Estuary/Estuary Audio Source")]
     [RequireComponent(typeof(AudioSource))]
@@ -30,9 +30,8 @@ namespace Estuary
         private float volume = 1f;
 
         [Header("Playback Settings")]
-        [SerializeField]
-        [Tooltip("Expected sample rate from server (16000 for optimized latency)")]
-        private int expectedSampleRate = 16000;
+        [Tooltip("Expected sample rate from server (matches Unity's audio output rate)")]
+        private int expectedSampleRate => AudioSettings.outputSampleRate;
 
         [SerializeField]
         [Tooltip("Stop playback when user starts speaking")]
@@ -62,9 +61,18 @@ namespace Estuary
         public bool IsPlaying => audioSource != null && audioSource.isPlaying;
 
         /// <summary>
-        /// Number of audio clips queued for playback.
+        /// Amount of audio buffered for playback (in samples).
         /// </summary>
-        public int QueuedClipCount => _audioQueue.Count;
+        public int BufferedSampleCount
+        {
+            get
+            {
+                lock (_streamingLock)
+                {
+                    return _samplesAvailable;
+                }
+            }
+        }
 
         /// <summary>
         /// Current message ID being played.
@@ -95,7 +103,7 @@ namespace Estuary
         public event Action OnPlaybackStarted;
 
         /// <summary>
-        /// Fired when all queued audio has finished playing.
+        /// Fired when audio streaming has finished.
         /// </summary>
         public event Action OnPlaybackComplete;
 
@@ -108,21 +116,21 @@ namespace Estuary
 
         #region Private Fields
 
-        private readonly Queue<AudioQueueItem> _audioQueue = new Queue<AudioQueueItem>();
-        private Coroutine _playbackCoroutine;
-        private bool _isProcessingQueue;
         private string _currentlyPlayingMessageId;
 
         // LiveKit mode fields
         private LiveKitVoiceManager _liveKitManager;
         private bool _useLiveKit;
-        private int _liveKitSampleRate = 16000;
-        private int _liveKitChannels = 1;
-        private Coroutine _liveKitPlaybackCoroutine;
-        private readonly object _liveKitLock = new object();
+
+        // Streaming playback fields (WebSocket mode - ring buffer)
+        private int _streamingSampleRate = 48000;
+        private int _streamingChannels = 1;
+        private Coroutine _streamingPlaybackCoroutine;
+        private readonly object _streamingLock = new object();
 
         // Ring buffer for continuous audio streaming (fixes audio gaps)
-        private const int RING_BUFFER_SECONDS = 3;
+        // 30 seconds to handle chatty characters with long responses
+        private const int RING_BUFFER_SECONDS = 30;
         private const float MIN_BUFFER_BEFORE_PLAY = 0.25f; // 250ms pre-buffer before starting playback (increased to reduce underruns)
         private const float BUFFER_LOW_THRESHOLD = 0.05f; // 50ms - consider underrun if below this
         private const float FADE_OUT_MS = 10f; // 10ms fade, smooth transition to silence on underrun
@@ -137,13 +145,6 @@ namespace Estuary
         private bool _hasStartedPlaying;
         private AudioClip _streamingClip;
         private bool _streamingClipPlaying;
-
-        private struct AudioQueueItem
-        {
-            public AudioClip Clip;
-            public string MessageId;
-            public int ChunkIndex;
-        }
 
         #endregion
 
@@ -166,6 +167,9 @@ namespace Estuary
             audioSource.loop = false;
             audioSource.spatialBlend = 0f; // 2D audio
             audioSource.volume = volume;
+
+            // Initialize ring buffer for WebSocket streaming playback
+            InitializeStreamingBuffer();
         }
 
         private void OnEnable()
@@ -185,20 +189,13 @@ namespace Estuary
                 microphoneRef.OnSpeechDetected -= HandleUserSpeechDetected;
             }
 
-            // Unsubscribe from LiveKit events
-            if (_liveKitManager != null)
-            {
-                _liveKitManager.OnAudioReceived -= HandleLiveKitAudioReceived;
-            }
-
             StopPlayback();
-            CleanupLiveKitBuffer();
+            CleanupStreamingBuffer();
         }
 
         private void OnDestroy()
         {
-            ClearQueue();
-            CleanupLiveKitBuffer();
+            CleanupStreamingBuffer();
         }
 
         #endregion
@@ -206,91 +203,126 @@ namespace Estuary
         #region Public Methods
 
         /// <summary>
-        /// Enqueue audio for playback.
+        /// Enqueue audio for playback via ring buffer streaming.
         /// </summary>
         /// <param name="voice">BotVoice data containing audio</param>
         public void EnqueueAudio(BotVoice voice)
         {
-            Debug.Log($"[EstuaryAudioSource] EnqueueAudio called, voice={voice}, DecodedAudioLength={voice?.DecodedAudio?.Length ?? 0}");
-            
+            // LiveKit handles its own audio via AudioStream - don't process here
+            if (_useLiveKit)
+            {
+                Debug.Log("[EstuaryAudioSource] Ignoring EnqueueAudio in LiveKit mode (audio handled by AudioStream)");
+                return;
+            }
+
             if (voice == null || voice.DecodedAudio.Length == 0)
             {
                 Debug.LogWarning("[EstuaryAudioSource] Received empty audio data");
                 return;
             }
 
-            // Create AudioClip from decoded audio
-            var clip = CreateAudioClipFromVoice(voice);
-            if (clip == null)
+            // Update current message ID
+            CurrentMessageId = voice.MessageId;
+            _currentlyPlayingMessageId = voice.MessageId;
+
+            // Convert PCM16 bytes to float samples
+            var samples = AudioConverter.PCM16ToFloat(voice.DecodedAudio);
+            if (samples.Length == 0)
             {
-                Debug.LogError("[EstuaryAudioSource] Failed to create AudioClip from voice data");
+                Debug.LogWarning("[EstuaryAudioSource] No samples decoded from voice data");
                 return;
             }
 
-            Debug.Log($"[EstuaryAudioSource] Created AudioClip: samples={clip.samples}, frequency={clip.frequency}, length={clip.length}s");
-
-            // Add to queue
-            _audioQueue.Enqueue(new AudioQueueItem
+            // Resample if incoming audio is at a different rate than expected
+            var voiceSampleRate = voice.SampleRate > 0 ? voice.SampleRate : expectedSampleRate;
+            if (voiceSampleRate != expectedSampleRate)
             {
-                Clip = clip,
-                MessageId = voice.MessageId,
-                ChunkIndex = voice.ChunkIndex
-            });
+                if (!_hasLoggedResample)
+                {
+                    Debug.Log($"[EstuaryAudioSource] Resampling audio from {voiceSampleRate}Hz to {expectedSampleRate}Hz");
+                    _hasLoggedResample = true;
+                }
+                samples = AudioConverter.Resample(samples, voiceSampleRate, expectedSampleRate);
+            }
 
-            Debug.Log($"[EstuaryAudioSource] Audio queued, queue size={_audioQueue.Count}, isProcessing={_isProcessingQueue}");
+            Debug.Log($"[EstuaryAudioSource] Writing {samples.Length} samples to ring buffer (chunk {voice.ChunkIndex})");
 
-            // Start processing queue if not already
-            if (!_isProcessingQueue)
+            // Write samples to ring buffer
+            WriteToRingBuffer(samples);
+
+            // Start streaming playback if not already running
+            if (!_isStreamingActive)
             {
-                _playbackCoroutine = StartCoroutine(ProcessQueueCoroutine());
+                _isStreamingActive = true;
+                _streamingPlaybackCoroutine = StartCoroutine(StreamingPlaybackCoroutine());
             }
         }
 
         /// <summary>
-        /// Enqueue raw audio bytes for playback.
+        /// Enqueue raw audio bytes for playback via ring buffer streaming.
         /// </summary>
         /// <param name="audioBytes">PCM16 audio bytes</param>
         /// <param name="sampleRate">Sample rate of the audio</param>
         /// <param name="messageId">Optional message ID</param>
         public void EnqueueAudio(byte[] audioBytes, int sampleRate, string messageId = null)
         {
-            var clip = AudioConverter.CreateAudioClipFromPCM16(audioBytes, sampleRate);
-            if (clip == null)
+            // LiveKit handles its own audio via AudioStream - don't process here
+            if (_useLiveKit)
             {
-                Debug.LogError("[EstuaryAudioSource] Failed to create AudioClip from bytes");
+                Debug.Log("[EstuaryAudioSource] Ignoring EnqueueAudio in LiveKit mode (audio handled by AudioStream)");
                 return;
             }
 
-            _audioQueue.Enqueue(new AudioQueueItem
+            if (audioBytes == null || audioBytes.Length == 0)
             {
-                Clip = clip,
-                MessageId = messageId,
-                ChunkIndex = 0
-            });
+                Debug.LogWarning("[EstuaryAudioSource] Received empty audio bytes");
+                return;
+            }
 
-            if (!_isProcessingQueue)
+            // Update current message ID
+            CurrentMessageId = messageId;
+            _currentlyPlayingMessageId = messageId;
+
+            // Convert PCM16 bytes to float samples
+            var samples = AudioConverter.PCM16ToFloat(audioBytes);
+            if (samples.Length == 0)
             {
-                _playbackCoroutine = StartCoroutine(ProcessQueueCoroutine());
+                Debug.LogWarning("[EstuaryAudioSource] No samples decoded from audio bytes");
+                return;
+            }
+
+            // Resample if incoming audio is at a different rate than expected
+            if (sampleRate != expectedSampleRate)
+            {
+                if (!_hasLoggedResample)
+                {
+                    Debug.Log($"[EstuaryAudioSource] Resampling audio from {sampleRate}Hz to {expectedSampleRate}Hz");
+                    _hasLoggedResample = true;
+                }
+                samples = AudioConverter.Resample(samples, sampleRate, expectedSampleRate);
+            }
+
+            // Write samples to ring buffer
+            WriteToRingBuffer(samples);
+
+            // Start streaming playback if not already running
+            if (!_isStreamingActive)
+            {
+                _isStreamingActive = true;
+                _streamingPlaybackCoroutine = StartCoroutine(StreamingPlaybackCoroutine());
             }
         }
 
         /// <summary>
-        /// Stop current playback and clear the queue.
+        /// Stop current playback and clear the streaming buffer.
         /// </summary>
         public void StopPlayback()
         {
-            // Stop WebSocket queue coroutine
-            if (_playbackCoroutine != null)
+            // Stop streaming playback coroutine
+            if (_streamingPlaybackCoroutine != null)
             {
-                StopCoroutine(_playbackCoroutine);
-                _playbackCoroutine = null;
-            }
-
-            // Stop LiveKit streaming coroutine
-            if (_liveKitPlaybackCoroutine != null)
-            {
-                StopCoroutine(_liveKitPlaybackCoroutine);
-                _liveKitPlaybackCoroutine = null;
+                StopCoroutine(_streamingPlaybackCoroutine);
+                _streamingPlaybackCoroutine = null;
             }
 
             // Stop audio
@@ -300,16 +332,9 @@ namespace Estuary
                 audioSource.loop = false;
             }
 
-            // Clear WebSocket queue
-            ClearQueue();
+            // Clear streaming buffer
+            ClearStreamingBuffer();
 
-            // Clear LiveKit ring buffer
-            if (_useLiveKit)
-            {
-                ClearLiveKitAudioBuffer();
-            }
-
-            _isProcessingQueue = false;
             _currentlyPlayingMessageId = null;
             _isStreamingActive = false;
             _streamingClipPlaying = false;
@@ -333,47 +358,10 @@ namespace Estuary
                 return;
             }
 
-            // Only interrupt if this message is currently playing or queued
+            // Only interrupt if this message is currently playing
             if (_currentlyPlayingMessageId == messageId)
             {
                 StopPlayback();
-            }
-            else
-            {
-                // Remove matching items from queue
-                var newQueue = new Queue<AudioQueueItem>();
-                while (_audioQueue.Count > 0)
-                {
-                    var item = _audioQueue.Dequeue();
-                    if (item.MessageId != messageId)
-                    {
-                        newQueue.Enqueue(item);
-                    }
-                    else
-                    {
-                        Destroy(item.Clip);
-                    }
-                }
-
-                while (newQueue.Count > 0)
-                {
-                    _audioQueue.Enqueue(newQueue.Dequeue());
-                }
-            }
-        }
-
-        /// <summary>
-        /// Clear all queued audio without stopping current playback.
-        /// </summary>
-        public void ClearQueue()
-        {
-            while (_audioQueue.Count > 0)
-            {
-                var item = _audioQueue.Dequeue();
-                if (item.Clip != null)
-                {
-                    Destroy(item.Clip);
-                }
             }
         }
 
@@ -401,31 +389,16 @@ namespace Estuary
         /// <summary>
         /// Set the LiveKit voice manager for WebRTC audio playback.
         /// When set, audio will be received via LiveKit instead of WebSocket.
+        /// NOTE: LiveKit handles audio playback automatically via AudioStream,
+        /// so no ring buffer is needed for LiveKit mode.
         /// </summary>
         /// <param name="manager">The LiveKitVoiceManager to use</param>
         public void SetLiveKitManager(LiveKitVoiceManager manager)
         {
-            // Unsubscribe from old manager
-            if (_liveKitManager != null)
-            {
-                _liveKitManager.OnAudioReceived -= HandleLiveKitAudioReceived;
-            }
-
             _liveKitManager = manager;
             _useLiveKit = manager != null;
 
-            // Subscribe to new manager
-            if (_liveKitManager != null)
-            {
-                _liveKitManager.OnAudioReceived += HandleLiveKitAudioReceived;
-                InitializeLiveKitBuffer();
-                Debug.Log("[EstuaryAudioSource] LiveKit mode enabled");
-            }
-            else
-            {
-                CleanupLiveKitBuffer();
-                Debug.Log("[EstuaryAudioSource] WebSocket mode enabled");
-            }
+            Debug.Log($"[EstuaryAudioSource] {(manager != null ? "LiveKit" : "WebSocket")} mode enabled");
         }
 
         /// <summary>
@@ -449,19 +422,19 @@ namespace Estuary
 
         #endregion
 
-        #region LiveKit Audio Handling - Ring Buffer Streaming
+        #region WebSocket Audio Handling - Ring Buffer Streaming
 
-        private void InitializeLiveKitBuffer()
+        private void InitializeStreamingBuffer()
         {
             // Use expected sample rate for buffer (incoming audio will be resampled if needed)
-            _liveKitSampleRate = expectedSampleRate;
+            _streamingSampleRate = expectedSampleRate;
 
             // Calculate fade-out samples based on actual sample rate (10ms fade)
-            _fadeOutSamples = (int)(_liveKitSampleRate * FADE_OUT_MS / 1000f);
+            _fadeOutSamples = (int)(_streamingSampleRate * FADE_OUT_MS / 1000f);
 
             // Create ring buffer for continuous audio streaming
             // Buffer size = sample rate * channels * seconds
-            _ringBufferSize = _liveKitSampleRate * _liveKitChannels * RING_BUFFER_SECONDS;
+            _ringBufferSize = _streamingSampleRate * _streamingChannels * RING_BUFFER_SECONDS;
             _ringBuffer = new float[_ringBufferSize];
             _writePosition = 0;
             _readPosition = 0;
@@ -471,19 +444,19 @@ namespace Estuary
             _streamingClipPlaying = false;
             _hasLoggedResample = false;
 
-            Debug.Log($"[EstuaryAudioSource] Initialized ring buffer: {_ringBufferSize} samples ({RING_BUFFER_SECONDS}s at {_liveKitSampleRate}Hz), fade-out: {_fadeOutSamples} samples ({FADE_OUT_MS}ms)");
+            Debug.Log($"[EstuaryAudioSource] Initialized streaming buffer: {_ringBufferSize} samples ({RING_BUFFER_SECONDS}s at {_streamingSampleRate}Hz), fade-out: {_fadeOutSamples} samples ({FADE_OUT_MS}ms)");
         }
 
-        private void CleanupLiveKitBuffer()
+        private void CleanupStreamingBuffer()
         {
             _isStreamingActive = false;
             _hasStartedPlaying = false;
             _streamingClipPlaying = false;
 
-            if (_liveKitPlaybackCoroutine != null)
+            if (_streamingPlaybackCoroutine != null)
             {
-                StopCoroutine(_liveKitPlaybackCoroutine);
-                _liveKitPlaybackCoroutine = null;
+                StopCoroutine(_streamingPlaybackCoroutine);
+                _streamingPlaybackCoroutine = null;
             }
 
             if (audioSource != null && audioSource.isPlaying)
@@ -497,7 +470,7 @@ namespace Estuary
                 _streamingClip = null;
             }
 
-            lock (_liveKitLock)
+            lock (_streamingLock)
             {
                 _ringBuffer = null;
                 _writePosition = 0;
@@ -509,9 +482,9 @@ namespace Estuary
         /// <summary>
         /// Clear all pending audio from the ring buffer (used for interrupts).
         /// </summary>
-        public void ClearLiveKitAudioBuffer()
+        public void ClearStreamingBuffer()
         {
-            lock (_liveKitLock)
+            lock (_streamingLock)
             {
                 if (_ringBuffer != null)
                 {
@@ -531,42 +504,18 @@ namespace Estuary
             
             _streamingClipPlaying = false;
 
-            Debug.Log("[EstuaryAudioSource] Cleared LiveKit audio buffer (interrupt)");
+            Debug.Log("[EstuaryAudioSource] Cleared streaming audio buffer (interrupt)");
         }
 
-        private void HandleLiveKitAudioReceived(byte[] pcmData, int sampleRate, int channels)
+        /// <summary>
+        /// Write audio samples to the ring buffer for streaming playback.
+        /// </summary>
+        private void WriteToRingBuffer(float[] samples)
         {
-            if (!_useLiveKit || pcmData == null || pcmData.Length == 0)
+            if (samples == null || samples.Length == 0)
                 return;
 
-            // Only reinitialize buffer if channels change (sample rate handled via resampling)
-            if (channels != _liveKitChannels)
-            {
-                _liveKitChannels = channels;
-                // Use expected sample rate for buffer, not incoming rate (we'll resample)
-                _liveKitSampleRate = expectedSampleRate;
-                InitializeLiveKitBuffer();
-            }
-
-            // Convert PCM16 bytes to float samples
-            var samples = AudioConverter.PCM16ToFloat(pcmData);
-            if (samples.Length == 0)
-                return;
-
-            // Resample if incoming audio is at a different rate than expected
-            // This prevents playback speed issues and maintains consistent buffer timing
-            if (sampleRate != expectedSampleRate)
-            {
-                if (!_hasLoggedResample)
-                {
-                    Debug.Log($"[EstuaryAudioSource] Resampling audio from {sampleRate}Hz to {expectedSampleRate}Hz");
-                    _hasLoggedResample = true;
-                }
-                samples = AudioConverter.Resample(samples, sampleRate, expectedSampleRate);
-            }
-
-            // Write samples to ring buffer
-            lock (_liveKitLock)
+            lock (_streamingLock)
             {
                 if (_ringBuffer == null)
                     return;
@@ -588,13 +537,6 @@ namespace Estuary
                     }
                 }
             }
-
-            // Start streaming playback if not already running
-            if (!_isStreamingActive)
-            {
-                _isStreamingActive = true;
-                _liveKitPlaybackCoroutine = StartCoroutine(StreamingPlaybackCoroutine());
-            }
         }
 
         private IEnumerator StreamingPlaybackCoroutine()
@@ -602,7 +544,7 @@ namespace Estuary
             Debug.Log("[EstuaryAudioSource] Starting streaming playback coroutine");
 
             // Calculate pre-buffer threshold in samples
-            int preBufferSamples = (int)(_liveKitSampleRate * _liveKitChannels * MIN_BUFFER_BEFORE_PLAY);
+            int preBufferSamples = (int)(_streamingSampleRate * _streamingChannels * MIN_BUFFER_BEFORE_PLAY);
             float emptyBufferTime = 0f;
             const float maxEmptyBufferWait = 1.0f; // Consider stream ended after 1s of empty buffer
 
@@ -610,14 +552,14 @@ namespace Estuary
             while (_isStreamingActive)
             {
                 int available;
-                lock (_liveKitLock)
+                lock (_streamingLock)
                 {
                     available = _samplesAvailable;
                 }
 
                 if (available >= preBufferSamples)
                 {
-                    Debug.Log($"[EstuaryAudioSource] Pre-buffer threshold reached: {available} samples ({(float)available / _liveKitSampleRate / _liveKitChannels * 1000:F0}ms)");
+                    Debug.Log($"[EstuaryAudioSource] Pre-buffer threshold reached: {available} samples ({(float)available / _streamingSampleRate / _streamingChannels * 1000:F0}ms)");
                     break;
                 }
 
@@ -626,16 +568,16 @@ namespace Estuary
 
             if (!_isStreamingActive)
             {
-                _liveKitPlaybackCoroutine = null;
+                _streamingPlaybackCoroutine = null;
                 yield break;
             }
 
             // Create streaming AudioClip with PCM reader callback
             _streamingClip = AudioClip.Create(
-                "LiveKitStream",
-                _ringBufferSize / _liveKitChannels, // Length in samples per channel
-                _liveKitChannels,
-                _liveKitSampleRate,
+                "WebSocketStream",
+                _ringBufferSize / _streamingChannels, // Length in samples per channel
+                _streamingChannels,
+                _streamingSampleRate,
                 true, // Stream
                 OnAudioRead,
                 OnAudioSetPosition
@@ -652,19 +594,19 @@ namespace Estuary
                 _hasStartedPlaying = true;
                 OnPlaybackStarted?.Invoke();
                 onPlaybackStarted?.Invoke();
-                Debug.Log("[EstuaryAudioSource] Started LiveKit streaming playback");
+                Debug.Log("[EstuaryAudioSource] Started WebSocket streaming playback");
             }
 
             // Monitor buffer and detect end of stream
             int bufferLogCounter = 0;
             const int bufferLogInterval = 20; // Log every ~1 second (20 * 0.05s)
             int lowBufferWarnings = 0;
-            int lowBufferThresholdSamples = (int)(_liveKitSampleRate * _liveKitChannels * BUFFER_LOW_THRESHOLD);
+            int lowBufferThresholdSamples = (int)(_streamingSampleRate * _streamingChannels * BUFFER_LOW_THRESHOLD);
             
             while (_isStreamingActive && _streamingClipPlaying)
             {
                 int available;
-                lock (_liveKitLock)
+                lock (_streamingLock)
                 {
                     available = _samplesAvailable;
                 }
@@ -688,7 +630,7 @@ namespace Estuary
                     if (available < lowBufferThresholdSamples)
                     {
                         lowBufferWarnings++;
-                        float bufferMs = (float)available / _liveKitSampleRate / _liveKitChannels * 1000;
+                        float bufferMs = (float)available / _streamingSampleRate / _streamingChannels * 1000;
                         Debug.LogWarning($"[EstuaryAudioSource] Buffer low: {bufferMs:F0}ms remaining (threshold: {BUFFER_LOW_THRESHOLD * 1000:F0}ms)");
                     }
                 }
@@ -699,7 +641,7 @@ namespace Estuary
                 {
                     bufferLogCounter = 0;
                     float fillPercent = (float)available / _ringBufferSize * 100;
-                    float bufferMs = (float)available / _liveKitSampleRate / _liveKitChannels * 1000;
+                    float bufferMs = (float)available / _streamingSampleRate / _streamingChannels * 1000;
                     Debug.Log($"[EstuaryAudioSource] Buffer health: {fillPercent:F1}% ({bufferMs:F0}ms), low warnings: {lowBufferWarnings}");
                 }
 
@@ -720,7 +662,7 @@ namespace Estuary
                 _hasStartedPlaying = false;
                 OnPlaybackComplete?.Invoke();
                 onPlaybackComplete?.Invoke();
-                Debug.Log("[EstuaryAudioSource] LiveKit streaming playback complete");
+                Debug.Log("[EstuaryAudioSource] WebSocket streaming playback complete");
 
                 // Notify server
                 NotifyPlaybackComplete();
@@ -733,8 +675,17 @@ namespace Estuary
                 _streamingClip = null;
             }
 
+            // Reset buffer positions for next message
+            lock (_streamingLock)
+            {
+                _writePosition = 0;
+                _readPosition = 0;
+                _samplesAvailable = 0;
+            }
+            _hasLoggedResample = false;
+
             _isStreamingActive = false;
-            _liveKitPlaybackCoroutine = null;
+            _streamingPlaybackCoroutine = null;
         }
 
         /// <summary>
@@ -744,7 +695,7 @@ namespace Estuary
         /// </summary>
         private void OnAudioRead(float[] data)
         {
-            lock (_liveKitLock)
+            lock (_streamingLock)
             {
                 if (_ringBuffer == null)
                 {
@@ -759,7 +710,7 @@ namespace Estuary
                 bool isUnderrun = samplesToRead < data.Length;
 
                 // Calculate fade-out region: apply fade to last _fadeOutSamples of available audio
-                int fadeOutSamples = _fadeOutSamples > 0 ? _fadeOutSamples : 160; // Fallback to 10ms at 16kHz
+                int fadeOutSamples = _fadeOutSamples > 0 ? _fadeOutSamples : 480; // Fallback to 10ms at 48kHz
                 int fadeStartIndex = isUnderrun ? Math.Max(0, samplesToRead - fadeOutSamples) : -1;
 
                 for (int i = 0; i < samplesToRead; i++)
@@ -801,125 +752,6 @@ namespace Estuary
         #endregion
 
         #region Private Methods
-
-        private AudioClip CreateAudioClipFromVoice(BotVoice voice)
-        {
-            try
-            {
-                // Decode base64 to PCM bytes
-                var pcmBytes = voice.DecodedAudio;
-
-                // Convert PCM16 to float samples
-                var samples = AudioConverter.PCM16ToFloat(pcmBytes);
-
-                if (samples.Length == 0)
-                {
-                    Debug.LogWarning("[EstuaryAudioSource] No samples decoded from voice data");
-                    return null;
-                }
-
-                // Create AudioClip
-                var sampleRate = voice.SampleRate > 0 ? voice.SampleRate : expectedSampleRate;
-                return AudioConverter.CreateAudioClip(samples, sampleRate, 1, $"EstuaryVoice_{voice.ChunkIndex}");
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[EstuaryAudioSource] Error creating AudioClip: {e.Message}");
-                return null;
-            }
-        }
-
-        private IEnumerator ProcessQueueCoroutine()
-        {
-            _isProcessingQueue = true;
-            var isFirstClip = true;
-            var emptyQueueWaitTime = 0f;
-            const float maxEmptyQueueWait = 2.0f; // Wait up to 2 seconds for more chunks
-
-            while (true)
-            {
-                if (_audioQueue.Count > 0)
-                {
-                    // Reset wait timer when we have audio
-                    emptyQueueWaitTime = 0f;
-                    
-                    var item = _audioQueue.Dequeue();
-
-                    if (item.Clip == null)
-                        continue;
-
-                    // Update current message ID
-                    _currentlyPlayingMessageId = item.MessageId;
-                    CurrentMessageId = item.MessageId;
-
-                    // Fire started event on first clip
-                    if (isFirstClip)
-                    {
-                        isFirstClip = false;
-                        OnPlaybackStarted?.Invoke();
-                        onPlaybackStarted?.Invoke();
-                        Debug.Log($"[EstuaryAudioSource] Started playing message {item.MessageId}");
-                    }
-
-                    // Play the clip
-                    audioSource.clip = item.Clip;
-                    audioSource.Play();
-
-                    // Wait for clip to finish
-                    while (audioSource.isPlaying)
-                    {
-                        yield return null;
-                    }
-
-                    // Cleanup
-                    Destroy(item.Clip);
-                }
-                else
-                {
-                    // Queue is empty - wait a bit for more chunks to arrive
-                    if (!isFirstClip) // Only wait if we've started playing
-                    {
-                        yield return new WaitForSeconds(0.05f);
-                        emptyQueueWaitTime += 0.05f;
-
-                        // If we've waited too long with no new audio, consider playback complete
-                        if (emptyQueueWaitTime >= maxEmptyQueueWait)
-                        {
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        // Haven't started yet, just wait briefly
-                        yield return new WaitForSeconds(0.01f);
-                        emptyQueueWaitTime += 0.01f;
-                        
-                        if (emptyQueueWaitTime >= 0.5f)
-                        {
-                            // No audio received for 500ms, exit
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // All clips played
-            _isProcessingQueue = false;
-            _currentlyPlayingMessageId = null;
-            _playbackCoroutine = null;
-
-            // Fire complete event only if we actually played something
-            if (!isFirstClip)
-            {
-                OnPlaybackComplete?.Invoke();
-                onPlaybackComplete?.Invoke();
-
-                Debug.Log("[EstuaryAudioSource] Playback complete");
-
-                // Notify server that playback is complete
-                NotifyPlaybackComplete();
-            }
-        }
 
         private async void NotifyPlaybackComplete()
         {
