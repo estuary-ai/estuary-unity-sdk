@@ -577,8 +577,8 @@ namespace Estuary
 
         internal void HandleBotVoice(BotVoice voice)
         {
-            Debug.Log($"[EstuaryCharacter] HandleBotVoice: received={voice.SampleRate}Hz, expected={AudioSettings.outputSampleRate}Hz, match={voice.SampleRate == AudioSettings.outputSampleRate}");
-
+            Debug.Log($"[EstuaryCharacter] HandleBotVoice called, audioSource={audioSource != null}, voice={voice}");
+            
             // Play audio if we have an audio source
             if (audioSource != null)
             {

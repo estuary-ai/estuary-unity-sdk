@@ -270,13 +270,11 @@ namespace Estuary
 
             try
             {
-                // Pass Unity's output sample rate so backend generates TTS at the correct rate
                 await _client.ConnectAsync(
                     config.ServerUrl,
                     config.ApiKey,
                     _activeCharacter.CharacterId,
-                    _activeCharacter.PlayerId,
-                    AudioSettings.outputSampleRate
+                    _activeCharacter.PlayerId
                 );
             }
             catch (Exception e)
