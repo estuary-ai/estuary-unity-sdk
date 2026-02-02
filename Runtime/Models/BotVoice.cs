@@ -23,9 +23,9 @@ namespace Estuary.Models
         public string Audio => audio;
 
         /// <summary>
-        /// Sample rate of the audio (default: 16000 for optimized latency).
+        /// Sample rate of the audio (default: 48000 for Unity's native rate).
         /// </summary>
-        public int SampleRate => sampleRate > 0 ? sampleRate : 16000;
+        public int SampleRate => sampleRate > 0 ? sampleRate : 48000;
 
         /// <summary>
         /// Index of this chunk in a streaming response.
@@ -109,7 +109,7 @@ namespace Estuary.Models
             return new BotVoice
             {
                 audio = response.audio,
-                sampleRate = response.sample_rate > 0 ? response.sample_rate : 16000,
+                sampleRate = response.sample_rate > 0 ? response.sample_rate : 48000,
                 chunkIndex = response.chunk_index,
                 messageId = response.message_id,
                 isInterjection = response.is_interjection,

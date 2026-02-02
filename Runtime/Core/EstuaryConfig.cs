@@ -53,8 +53,8 @@ namespace Estuary
         private int recordingSampleRate = 16000;
 
         [SerializeField]
-        [Tooltip("Expected sample rate for voice playback (16000 for optimized latency)")]
-        private int playbackSampleRate = 16000;
+        [Tooltip("Expected sample rate for voice playback (48000 for Unity's native rate)")]
+        private int playbackSampleRate = 48000;
 
         [SerializeField]
         [Tooltip("Duration of audio chunks to send (in milliseconds)")]
