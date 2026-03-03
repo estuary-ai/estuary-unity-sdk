@@ -49,7 +49,7 @@ namespace Estuary
         private Coroutine _pollCoroutine;
         
         // VAD (Voice Activity Detection) settings
-        private bool _vadEnabled = true;
+        private bool _vadEnabled = false;
         private float _vadThreshold = 0.010f; // RMS threshold - tuned for near-field AR glasses
         private float _currentVolume;
         private bool _wasSpeaking;

@@ -270,13 +270,28 @@ namespace Estuary
 
             try
             {
+                // Resolve token from provider if available
+                string token = null;
+                if (config.TokenProvider != null)
+                {
+                    try
+                    {
+                        token = await config.TokenProvider();
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"[EstuaryManager] Token provider failed, falling back to API key: {e.Message}");
+                    }
+                }
+
                 // Pass Unity's output sample rate so backend generates TTS at the correct rate
                 await _client.ConnectAsync(
                     config.ServerUrl,
                     config.ApiKey,
                     _activeCharacter.CharacterId,
                     _activeCharacter.PlayerId,
-                    AudioSettings.outputSampleRate
+                    AudioSettings.outputSampleRate,
+                    token
                 );
             }
             catch (Exception e)

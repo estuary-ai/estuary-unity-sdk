@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace Estuary
@@ -97,6 +98,20 @@ namespace Estuary
             set => debugLogging = value;
         }
 
+        /// <summary>
+        /// Optional async token provider for Firebase or other auth.
+        /// When set, the SDK uses Bearer token auth instead of API key.
+        /// Set this at runtime: config.TokenProvider = () => FirebaseAuth.DefaultInstance.CurrentUser.TokenAsync(false);
+        /// </summary>
+        [NonSerialized]
+        private Func<Task<string>> _tokenProvider;
+
+        public Func<Task<string>> TokenProvider
+        {
+            get => _tokenProvider;
+            set => _tokenProvider = value;
+        }
+
         #endregion
 
         #region Validation
@@ -154,8 +169,8 @@ namespace Estuary
         /// <returns>True if global configuration is valid</returns>
         public bool IsValid()
         {
-            return !string.IsNullOrEmpty(serverUrl) 
-                && !string.IsNullOrEmpty(apiKey);
+            return !string.IsNullOrEmpty(serverUrl)
+                && (!string.IsNullOrEmpty(apiKey) || _tokenProvider != null);
         }
 
         /// <summary>
@@ -170,9 +185,9 @@ namespace Estuary
                 return "Server URL is not set";
             }
 
-            if (string.IsNullOrEmpty(apiKey))
+            if (string.IsNullOrEmpty(apiKey) && _tokenProvider == null)
             {
-                return "API key is not set";
+                return "API key is not set and no token provider configured";
             }
 
             return null;
