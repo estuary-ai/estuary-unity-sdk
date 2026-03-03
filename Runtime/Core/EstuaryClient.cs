@@ -643,6 +643,20 @@ namespace Estuary
                 SetState(ConnectionState.Connected);
                 Log($"Session established: {sessionInfo}");
                 DispatchToMainThread(() => OnSessionConnected?.Invoke(sessionInfo));
+
+                // If session_info includes embedded LiveKit token, fire token event immediately.
+                // This eliminates the separate livekit_token request round-trip (saves 200-600ms).
+                if (sessionInfo.HasLiveKitToken)
+                {
+                    Log("Using embedded LiveKit token from session_info (skipping livekit_token request)");
+                    var tokenResponse = new LiveKitTokenResponse
+                    {
+                        token = sessionInfo.LiveKitToken,
+                        url = sessionInfo.LiveKitUrl,
+                        room = sessionInfo.LiveKitRoom,
+                    };
+                    DispatchToMainThread(() => OnLiveKitTokenReceived?.Invoke(tokenResponse));
+                }
             }
             catch (Exception e)
             {

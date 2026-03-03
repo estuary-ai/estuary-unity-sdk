@@ -13,6 +13,9 @@ namespace Estuary.Models
         [SerializeField] private string conversationId;
         [SerializeField] private string characterId;
         [SerializeField] private string playerId;
+        [SerializeField] private string livekitToken;
+        [SerializeField] private string livekitUrl;
+        [SerializeField] private string livekitRoom;
 
         /// <summary>
         /// Unique identifier for this session.
@@ -33,6 +36,27 @@ namespace Estuary.Models
         /// The player ID associated with this session.
         /// </summary>
         public string PlayerId => playerId;
+
+        /// <summary>
+        /// LiveKit token (if embedded in session_info for latency optimization).
+        /// Null if LiveKit is not enabled or token was not included.
+        /// </summary>
+        public string LiveKitToken => livekitToken;
+
+        /// <summary>
+        /// LiveKit server URL (if embedded in session_info).
+        /// </summary>
+        public string LiveKitUrl => livekitUrl;
+
+        /// <summary>
+        /// LiveKit room name (if embedded in session_info).
+        /// </summary>
+        public string LiveKitRoom => livekitRoom;
+
+        /// <summary>
+        /// Whether this session_info includes an embedded LiveKit token.
+        /// </summary>
+        public bool HasLiveKitToken => !string.IsNullOrEmpty(livekitToken);
 
         public SessionInfo() { }
 
