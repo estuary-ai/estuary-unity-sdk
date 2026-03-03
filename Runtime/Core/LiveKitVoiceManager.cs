@@ -383,29 +383,15 @@ namespace Estuary
             {
                 Log($"Android AEC available: {AndroidAudioConfiguration.IsAecAvailable()}");
             }
-#elif UNITY_IOS && !UNITY_EDITOR
-            // On iOS, configure AVAudioSession for voice communication mode
-            // This enables hardware AEC (Acoustic Echo Cancellation) at the platform level
-            // by setting the audio session to .playAndRecord with .voiceChat mode
-            Log("Configuring iOS audio for voice chat...");
-            if (!iOSAudioConfiguration.ConfigureForVoiceChat())
-            {
-                LogError("Failed to configure iOS audio - AEC may not be enabled");
-            }
-            else
-            {
-                Log($"iOS AEC available: {iOSAudioConfiguration.IsAecAvailable()}");
-            }
 #endif
 
-            // Use DirectMicrophoneSource on all platforms including Android
-            // This uses Unity's built-in Microphone API which works reliably everywhere.
-            // 
-            // NOTE: AndroidMicrophoneSource was previously used on Android but has a fundamental
-            // JNI limitation: Unity's AndroidJavaObject.Call() doesn't return modified array data
-            // from Java methods, so AudioRecord.read() data was never received by C#.
+#if UNITY_IOS && !UNITY_EDITOR
+            Log("Using VPIOAudioSource (hardware AEC via VPIO audio unit)");
+            _microphoneSource = new VPIOAudioSource(_coroutineRunner);
+#else
             Log("Using DirectMicrophoneSource");
             _microphoneSource = new DirectMicrophoneSource(deviceName, _coroutineRunner);
+#endif
 
             // Create local audio track from microphone source
             _localAudioTrack = LocalAudioTrack.CreateAudioTrack("microphone", _microphoneSource, _room);
@@ -435,7 +421,7 @@ namespace Estuary
 #if UNITY_ANDROID && !UNITY_EDITOR
             Log("Microphone capture started (AEC enabled via Android platform audio processing)");
 #elif UNITY_IOS && !UNITY_EDITOR
-            Log("Microphone capture started (AEC enabled via iOS AVAudioSession voiceChat mode)");
+            Log("Microphone capture started (AEC enabled via iOS VPIO audio unit)");
 #else
             Log("Microphone capture started (AEC enabled via WebRTC)");
 #endif
@@ -476,9 +462,6 @@ namespace Estuary
 #if UNITY_ANDROID && !UNITY_EDITOR
                 // Reset Android audio configuration
                 AndroidAudioConfiguration.ResetConfiguration();
-#elif UNITY_IOS && !UNITY_EDITOR
-                // Reset iOS audio configuration
-                iOSAudioConfiguration.ResetConfiguration();
 #endif
 
                 IsPublishing = false;
@@ -984,9 +967,6 @@ namespace Estuary
 #if UNITY_ANDROID && !UNITY_EDITOR
             // Reset Android audio configuration
             AndroidAudioConfiguration.ResetConfiguration();
-#elif UNITY_IOS && !UNITY_EDITOR
-            // Reset iOS audio configuration
-            iOSAudioConfiguration.ResetConfiguration();
 #endif
         }
 
