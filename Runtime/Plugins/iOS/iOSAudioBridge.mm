@@ -4,14 +4,14 @@
 /// Called from C# via [DllImport("__Internal")] in iOSAudioConfiguration.cs.
 ///
 /// Enables hardware AEC (Acoustic Echo Cancellation) by setting the audio session
-/// to .playAndRecord category with .voiceChat mode. This is the iOS-standard way
-/// to get echo cancellation for voice communication apps.
+/// to .playAndRecord category with .videoChat mode. This matches the LiveKit Swift
+/// SDK defaults — VideoChat mode enables AEC and routes audio to speaker.
 
 extern "C" {
 
     /// Configure AVAudioSession for voice chat with hardware AEC enabled.
-    /// Sets category to PlayAndRecord with DefaultToSpeaker and AllowBluetooth options,
-    /// and mode to VoiceChat which enables hardware AEC on iOS.
+    /// Sets category to PlayAndRecord with AllowBluetooth and AllowBluetoothA2DP options,
+    /// and mode to VideoChat which enables hardware AEC and speaker output on iOS.
     /// Returns 1 on success, 0 on failure.
     int EstuaryiOS_ConfigureForVoiceChat()
     {
@@ -21,12 +21,12 @@ extern "C" {
             AVAudioSession *session = [AVAudioSession sharedInstance];
             NSError *error = nil;
 
-            // Set category to PlayAndRecord with speaker and Bluetooth options
-            // - DefaultToSpeaker: routes audio to speaker instead of earpiece
-            // - AllowBluetooth: allows Bluetooth headsets (which have their own AEC)
+            // Set category to PlayAndRecord with Bluetooth options
+            // - AllowBluetooth: allows Bluetooth HFP headsets (which have their own AEC)
+            // - AllowBluetoothA2DP: allows high-quality A2DP Bluetooth audio output
             BOOL categorySuccess = [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                                            withOptions:(AVAudioSessionCategoryOptionDefaultToSpeaker |
-                                                         AVAudioSessionCategoryOptionAllowBluetooth)
+                                            withOptions:(AVAudioSessionCategoryOptionAllowBluetooth |
+                                                         AVAudioSessionCategoryOptionAllowBluetoothA2DP)
                                                   error:&error];
             if (!categorySuccess)
             {
@@ -34,16 +34,17 @@ extern "C" {
                 return 0;
             }
 
-            // Set mode to VoiceChat — this is the critical line that enables hardware AEC
-            // iOS applies signal processing optimized for voice communication including:
+            // Set mode to VideoChat — enables hardware AEC and routes audio to speaker
+            // VideoChat mode applies the same voice processing as VoiceChat:
             // - Acoustic Echo Cancellation (AEC)
             // - Noise Suppression (NS)
             // - Auto Gain Control (AGC)
+            // but defaults to speaker output instead of earpiece (no DefaultToSpeaker needed)
             error = nil;
-            BOOL modeSuccess = [session setMode:AVAudioSessionModeVoiceChat error:&error];
+            BOOL modeSuccess = [session setMode:AVAudioSessionModeVideoChat error:&error];
             if (!modeSuccess)
             {
-                NSLog(@"[iOSAudioBridge] Failed to set voice chat mode: %@", error.localizedDescription);
+                NSLog(@"[iOSAudioBridge] Failed to set video chat mode: %@", error.localizedDescription);
                 return 0;
             }
 
@@ -58,7 +59,7 @@ extern "C" {
 
             NSLog(@"[iOSAudioBridge] AVAudioSession configured successfully:");
             NSLog(@"[iOSAudioBridge]   Category: PlayAndRecord");
-            NSLog(@"[iOSAudioBridge]   Mode: VoiceChat (hardware AEC enabled)");
+            NSLog(@"[iOSAudioBridge]   Mode: VideoChat (hardware AEC enabled)");
             NSLog(@"[iOSAudioBridge]   Sample Rate: %.0f Hz", session.sampleRate);
             NSLog(@"[iOSAudioBridge]   Input Channels: %ld", (long)session.inputNumberOfChannels);
             NSLog(@"[iOSAudioBridge]   Output Channels: %ld", (long)session.outputNumberOfChannels);
@@ -101,12 +102,12 @@ extern "C" {
     }
 
     /// Check if AEC is available. On iOS, hardware AEC is always available
-    /// when using VoiceChat mode, so this always returns 1.
+    /// when using VideoChat mode, so this always returns 1.
     int EstuaryiOS_IsAecAvailable()
     {
-        // Hardware AEC is always available on iOS when using VoiceChat mode.
+        // Hardware AEC is always available on iOS when using VideoChat mode.
         // Unlike Android where AEC depends on device hardware/drivers,
-        // iOS guarantees AEC in the VoiceChat audio session mode.
+        // iOS guarantees AEC in the VideoChat audio session mode.
         return 1;
     }
 }
