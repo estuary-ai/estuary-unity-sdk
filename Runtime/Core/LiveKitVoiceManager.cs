@@ -361,20 +361,20 @@ namespace Estuary
 #if UNITY_ANDROID && !UNITY_EDITOR
             // On Android, configure the audio system for voice communication mode
             // This enables hardware AEC (Acoustic Echo Cancellation) at the platform level
-            // 
+            //
             // NOTE: Using AndroidAudioMode.Normal by default for better audio streaming.
             // MODE_IN_COMMUNICATION can cause choppy audio on some devices (especially AR glasses)
             // as it changes audio buffering behavior.
             Log("Configuring Android audio for voice chat...");
             Log(AndroidAudioConfiguration.GetAudioCapabilitiesInfo());
-            
+
             // Default to Normal mode for smoother audio streaming
             // VoiceCommunication mode can interfere with LiveKit's audio output on some devices
             if (AndroidAudioConfiguration.PreferredMode == AndroidAudioMode.VoiceCommunication)
             {
                 Log("Using VoiceCommunication mode - if audio is choppy, try AndroidAudioMode.Normal");
             }
-            
+
             if (!AndroidAudioConfiguration.ConfigureForVoiceChat())
             {
                 LogError("Failed to configure Android audio - AEC may not be enabled");
@@ -382,6 +382,19 @@ namespace Estuary
             else
             {
                 Log($"Android AEC available: {AndroidAudioConfiguration.IsAecAvailable()}");
+            }
+#elif UNITY_IOS && !UNITY_EDITOR
+            // On iOS, configure AVAudioSession for voice communication mode
+            // This enables hardware AEC (Acoustic Echo Cancellation) at the platform level
+            // by setting the audio session to .playAndRecord with .voiceChat mode
+            Log("Configuring iOS audio for voice chat...");
+            if (!iOSAudioConfiguration.ConfigureForVoiceChat())
+            {
+                LogError("Failed to configure iOS audio - AEC may not be enabled");
+            }
+            else
+            {
+                Log($"iOS AEC available: {iOSAudioConfiguration.IsAecAvailable()}");
             }
 #endif
 
@@ -421,6 +434,8 @@ namespace Estuary
             IsPublishing = true;
 #if UNITY_ANDROID && !UNITY_EDITOR
             Log("Microphone capture started (AEC enabled via Android platform audio processing)");
+#elif UNITY_IOS && !UNITY_EDITOR
+            Log("Microphone capture started (AEC enabled via iOS AVAudioSession voiceChat mode)");
 #else
             Log("Microphone capture started (AEC enabled via WebRTC)");
 #endif
@@ -461,6 +476,9 @@ namespace Estuary
 #if UNITY_ANDROID && !UNITY_EDITOR
                 // Reset Android audio configuration
                 AndroidAudioConfiguration.ResetConfiguration();
+#elif UNITY_IOS && !UNITY_EDITOR
+                // Reset iOS audio configuration
+                iOSAudioConfiguration.ResetConfiguration();
 #endif
 
                 IsPublishing = false;
@@ -966,6 +984,9 @@ namespace Estuary
 #if UNITY_ANDROID && !UNITY_EDITOR
             // Reset Android audio configuration
             AndroidAudioConfiguration.ResetConfiguration();
+#elif UNITY_IOS && !UNITY_EDITOR
+            // Reset iOS audio configuration
+            iOSAudioConfiguration.ResetConfiguration();
 #endif
         }
 
