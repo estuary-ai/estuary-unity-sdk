@@ -145,6 +145,16 @@ namespace Estuary
                 }
                 return;
             }
+#elif UNITY_IOS && !UNITY_EDITOR
+            if (!Application.HasUserAuthorization(UserAuthorization.Microphone))
+            {
+                Debug.Log("[DirectMicrophoneSource] Requesting iOS microphone permission...");
+                if (_coroutineRunner != null)
+                    _coroutineRunner.StartCoroutine(RequestiOSPermissionAndStart());
+                else
+                    Debug.LogError("[DirectMicrophoneSource] No coroutine runner for iOS permission request");
+                return;
+            }
 #else
             if (!Application.HasUserAuthorization(UserAuthorization.Microphone))
             {
@@ -162,13 +172,13 @@ namespace Estuary
             // Wait for permission with timeout
             float timeout = 10f;
             float elapsed = 0f;
-            
+
             while (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone) && elapsed < timeout)
             {
                 yield return new WaitForSeconds(0.5f);
                 elapsed += 0.5f;
             }
-            
+
             if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
             {
                 Debug.Log("[DirectMicrophoneSource] Microphone permission granted, starting capture");
@@ -177,6 +187,22 @@ namespace Estuary
             else
             {
                 Debug.LogError("[DirectMicrophoneSource] Microphone permission denied or timed out");
+            }
+        }
+#elif UNITY_IOS && !UNITY_EDITOR
+        private IEnumerator RequestiOSPermissionAndStart()
+        {
+            var request = Application.RequestUserAuthorization(UserAuthorization.Microphone);
+            yield return request;
+
+            if (Application.HasUserAuthorization(UserAuthorization.Microphone))
+            {
+                Debug.Log("[DirectMicrophoneSource] iOS microphone permission granted");
+                StartMicrophoneInternal();
+            }
+            else
+            {
+                Debug.LogError("[DirectMicrophoneSource] iOS microphone permission denied");
             }
         }
 #endif

@@ -36,6 +36,8 @@ namespace Estuary.Editor
 
             pbxProject.WriteToFile(pbxProjectPath);
 
+            EnsureMicrophoneUsageDescription(pathToBuiltProject);
+
             Debug.Log($"{LogPrefix} iOS post-build processor completed successfully.");
         }
 
@@ -62,6 +64,21 @@ namespace Estuary.Editor
         {
             pbxProject.AddBuildProperty(targetGuid, "OTHER_LDFLAGS", "-ObjC");
             Debug.Log($"{LogPrefix} Added -ObjC linker flag.");
+        }
+
+        private static void EnsureMicrophoneUsageDescription(string pathToBuiltProject)
+        {
+            var plistPath = Path.Combine(pathToBuiltProject, "Info.plist");
+            var plist = new PlistDocument();
+            plist.ReadFromFile(plistPath);
+
+            if (!plist.root.values.ContainsKey("NSMicrophoneUsageDescription"))
+            {
+                plist.root.SetString("NSMicrophoneUsageDescription",
+                    "Microphone access is required for voice conversation with AI characters.");
+                plist.WriteToFile(plistPath);
+                Debug.Log($"{LogPrefix} Added NSMicrophoneUsageDescription to Info.plist");
+            }
         }
 
         private static void ReorderLibraries(PBXProject pbxProject, string targetGuid,
