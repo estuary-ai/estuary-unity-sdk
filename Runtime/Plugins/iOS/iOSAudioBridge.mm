@@ -26,7 +26,8 @@ extern "C" {
             // - AllowBluetoothA2DP: allows high-quality A2DP Bluetooth audio output
             BOOL categorySuccess = [session setCategory:AVAudioSessionCategoryPlayAndRecord
                                             withOptions:(AVAudioSessionCategoryOptionAllowBluetooth |
-                                                         AVAudioSessionCategoryOptionAllowBluetoothA2DP)
+                                                         AVAudioSessionCategoryOptionAllowBluetoothA2DP |
+                                                         AVAudioSessionCategoryOptionDefaultToSpeaker)
                                                   error:&error];
             if (!categorySuccess)
             {
