@@ -150,6 +150,7 @@ namespace Estuary
         private string _characterId;
         private string _playerId;
         private int _audioSampleRate;
+        private string _token;
 
         private CancellationTokenSource _cancellationTokenSource;
         private int _reconnectAttempts;
@@ -174,15 +175,16 @@ namespace Estuary
         /// <param name="characterId">The character UUID to connect to</param>
         /// <param name="playerId">Unique player identifier for conversation persistence</param>
         /// <param name="audioSampleRate">TTS playback sample rate (default: 48000 for Unity)</param>
-        public async Task ConnectAsync(string serverUrl, string apiKey, string characterId, string playerId, int audioSampleRate = 48000)
+        /// <param name="token">Optional Firebase Bearer token for authenticated connections</param>
+        public async Task ConnectAsync(string serverUrl, string apiKey, string characterId, string playerId, int audioSampleRate = 48000, string token = null)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(EstuaryClient));
 
             if (string.IsNullOrEmpty(serverUrl))
                 throw new ArgumentNullException(nameof(serverUrl));
-            if (string.IsNullOrEmpty(apiKey))
-                throw new ArgumentNullException(nameof(apiKey));
+            if (string.IsNullOrEmpty(apiKey) && string.IsNullOrEmpty(token))
+                throw new ArgumentException("Either apiKey or token must be provided");
             if (string.IsNullOrEmpty(characterId))
                 throw new ArgumentNullException(nameof(characterId));
             if (string.IsNullOrEmpty(playerId))
@@ -193,6 +195,7 @@ namespace Estuary
             _characterId = characterId;
             _playerId = playerId;
             _audioSampleRate = audioSampleRate;
+            _token = token;
 
             await ConnectInternalAsync();
         }
@@ -550,7 +553,8 @@ namespace Estuary
                     api_key = _apiKey,
                     character_id = _characterId,
                     player_id = _playerId,
-                    audio_sample_rate = _audioSampleRate
+                    audio_sample_rate = _audioSampleRate,
+                    token = _token  // Will be null if not using Firebase auth
                 };
                 await _socket.ConnectAsync(_serverUrl, SDK_NAMESPACE, auth);
                 Log($"Connecting to {_serverUrl}{SDK_NAMESPACE} with auth for character {_characterId}, audio_sample_rate={_audioSampleRate}Hz...");
@@ -587,6 +591,7 @@ namespace Estuary
             public string character_id;
             public string player_id;
             public int audio_sample_rate;
+            public string token;  // Firebase Bearer token (optional)
         }
         
         [Serializable]
