@@ -1,1 +1,7 @@
 .DS_Store
+
+# Config assets containing API keys
+EstuaryConfig.asset
+EstuaryConfig.asset.meta
+Runtime/EstuaryConfig.asset
+Runtime/EstuaryConfig.asset.meta
