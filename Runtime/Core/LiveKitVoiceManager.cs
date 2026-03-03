@@ -155,6 +155,21 @@ namespace Estuary
         #region Public Methods
 
         /// <summary>
+        /// Pre-create the LiveKit Room instance and attach event handlers.
+        /// Call this early (e.g., when session_info arrives) so that when the token
+        /// arrives, ConnectAsync only needs to call Room.Connect() -- no allocation overhead.
+        /// </summary>
+        public void PrewarmRoom()
+        {
+            if (_disposed || _room != null) return;
+
+            Log("Pre-warming LiveKit Room instance...");
+            _room = new Room();
+            SetupRoomEventHandlers();
+            Log("Room pre-warmed and event handlers attached");
+        }
+
+        /// <summary>
         /// Connect to a LiveKit room using the provided token.
         /// </summary>
         /// <param name="url">LiveKit server URL</param>
@@ -179,11 +194,12 @@ namespace Estuary
                 CurrentRoomName = roomName;
                 Log($"Connecting to LiveKit room: {roomName} at {url}");
 
-                // Create room instance
-                _room = new Room();
-
-                // Set up event handlers before connecting
-                SetupRoomEventHandlers();
+                // Use pre-warmed room if available, otherwise create new
+                if (_room == null)
+                {
+                    _room = new Room();
+                    SetupRoomEventHandlers();
+                }
 
                 // Create task completion source
                 _connectTcs = new TaskCompletionSource<bool>();

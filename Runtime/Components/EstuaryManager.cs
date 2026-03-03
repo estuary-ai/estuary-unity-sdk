@@ -725,13 +725,29 @@ namespace Estuary
             // Notify active character
             _activeCharacter?.HandleSessionConnected(sessionInfo);
 
+            // Pre-warm LiveKit Room if enabled (creates Room + event handlers before token arrives)
+            // This saves 50-100ms by avoiding allocation overhead when ConnectAsync is called
+            if (config != null && config.IsLiveKitEnabled)
+            {
+                _liveKitManager?.PrewarmRoom();
+            }
+
             // Auto-connect to LiveKit if enabled AND the character wants voice auto-start
             // If AutoStartVoiceSession is false, don't auto-connect LiveKit - wait for explicit StartVoiceSession()
             bool characterWantsVoice = _activeCharacter?.AutoStartVoiceSession ?? false;
             if (config != null && config.IsLiveKitEnabled && characterWantsVoice)
             {
-                Log("Auto-requesting LiveKit token...");
-                _ = RequestLiveKitTokenAsync();
+                // If session_info included an embedded LiveKit token, don't also request one separately.
+                // The embedded token was already dispatched via OnLiveKitTokenReceived in HandleSessionInfo.
+                if (sessionInfo.HasLiveKitToken)
+                {
+                    Log("Skipping LiveKit token request -- using embedded token from session_info");
+                }
+                else
+                {
+                    Log("Auto-requesting LiveKit token...");
+                    _ = RequestLiveKitTokenAsync();
+                }
             }
         }
 
@@ -858,16 +874,25 @@ namespace Estuary
             Log($"Connected to LiveKit room: {roomName}");
             SetLiveKitState(LiveKitConnectionState.WaitingForBot);
 
-            // Notify server that we've joined
+            // Pipeline: notify server AND start mic publishing concurrently.
+            // The bot join (triggered by livekit_join) takes 500-1500ms on the server.
+            // Start mic setup in parallel so it's ready when the bot arrives.
+            // The livekit_ready event still fires and sets state to Ready for UI consumers.
+            var tasks = new System.Collections.Generic.List<Task>();
+
             if (_client != null && _client.IsConnected)
             {
-                await _client.NotifyLiveKitJoinedAsync();
+                tasks.Add(_client.NotifyLiveKitJoinedAsync());
             }
 
-            // Start publishing audio if the active character wants voice
             if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession)
             {
-                await StartLiveKitPublishingAsync();
+                tasks.Add(StartLiveKitPublishingAsync());
+            }
+
+            if (tasks.Count > 0)
+            {
+                await Task.WhenAll(tasks);
             }
         }
 
