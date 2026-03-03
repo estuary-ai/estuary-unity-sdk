@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 using Estuary.Models;
@@ -18,11 +19,55 @@ namespace Estuary
     {
         readonly string _serverUrl;
         readonly string _apiKey;
+        readonly Func<Task<string>> _tokenProvider;
 
         public EstuaryHttpClient(EstuaryConfig config)
         {
             _serverUrl = config.ServerUrl.TrimEnd('/');
             _apiKey = config.ApiKey;
+            _tokenProvider = config.TokenProvider;
+        }
+
+        /// <summary>
+        /// Gets the current auth token if a token provider is set.
+        /// Returns null if no provider or if the provider fails.
+        /// </summary>
+        private IEnumerator ResolveToken(Action<string> onToken)
+        {
+            if (_tokenProvider == null)
+            {
+                onToken?.Invoke(null);
+                yield break;
+            }
+
+            var tokenTask = _tokenProvider();
+            while (!tokenTask.IsCompleted)
+                yield return null;
+
+            if (tokenTask.Exception != null || string.IsNullOrEmpty(tokenTask.Result))
+            {
+                Debug.LogWarning("[EstuaryHttpClient] Token provider failed, falling back to API key");
+                onToken?.Invoke(null);
+                yield break;
+            }
+
+            onToken?.Invoke(tokenTask.Result);
+        }
+
+        /// <summary>
+        /// Applies auth header to a UnityWebRequest.
+        /// Uses Bearer token if available, otherwise X-API-Key.
+        /// </summary>
+        private void ApplyAuth(UnityWebRequest request, string token)
+        {
+            if (!string.IsNullOrEmpty(token))
+            {
+                request.SetRequestHeader("Authorization", $"Bearer {token}");
+            }
+            else if (!string.IsNullOrEmpty(_apiKey))
+            {
+                request.SetRequestHeader("X-API-Key", _apiKey);
+            }
         }
 
         /// <summary>
@@ -33,6 +78,9 @@ namespace Estuary
             byte[] imageBytes, string mimeType,
             Action<AgentResponse> onSuccess, Action<string> onError)
         {
+            string token = null;
+            yield return ResolveToken(t => token = t);
+
             var url = $"{_serverUrl}/api/generate/image-to-character";
 
             var form = new List<IMultipartFormSection>
@@ -42,7 +90,7 @@ namespace Estuary
 
             using (var request = UnityWebRequest.Post(url, form))
             {
-                request.SetRequestHeader("X-API-Key", _apiKey);
+                ApplyAuth(request, token);
                 request.timeout = 30;
 
                 yield return request.SendWebRequest();
@@ -73,11 +121,14 @@ namespace Estuary
             string agentId,
             Action<ModelStatusResponse> onSuccess, Action<string> onError)
         {
+            string token = null;
+            yield return ResolveToken(t => token = t);
+
             var url = $"{_serverUrl}/api/generate/{agentId}/model-status";
 
             using (var request = UnityWebRequest.Get(url))
             {
-                request.SetRequestHeader("X-API-Key", _apiKey);
+                ApplyAuth(request, token);
                 request.timeout = 10;
 
                 yield return request.SendWebRequest();
