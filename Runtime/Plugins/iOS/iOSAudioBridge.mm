@@ -49,6 +49,21 @@ extern "C" {
                 return 0;
             }
 
+            // Set preferred IO buffer duration to 5ms for minimal capture latency.
+            // iOS typically honors this, reducing the hardware callback interval from
+            // the default ~10-20ms to ~5ms (~240 samples at 48kHz).
+            error = nil;
+            BOOL bufferSuccess = [session setPreferredIOBufferDuration:0.005 error:&error];
+            if (!bufferSuccess)
+            {
+                NSLog(@"[iOSAudioBridge] Warning: Failed to set preferred IO buffer duration: %@", error.localizedDescription);
+                // Non-fatal: continue with default buffer duration
+            }
+            else
+            {
+                NSLog(@"[iOSAudioBridge]   Preferred IO Buffer Duration: 5ms");
+            }
+
             // Activate the audio session
             error = nil;
             BOOL activateSuccess = [session setActive:YES error:&error];
@@ -62,6 +77,7 @@ extern "C" {
             NSLog(@"[iOSAudioBridge]   Category: PlayAndRecord");
             NSLog(@"[iOSAudioBridge]   Mode: VideoChat (hardware AEC enabled)");
             NSLog(@"[iOSAudioBridge]   Sample Rate: %.0f Hz", session.sampleRate);
+            NSLog(@"[iOSAudioBridge]   Actual IO Buffer Duration: %.1f ms", session.IOBufferDuration * 1000);
             NSLog(@"[iOSAudioBridge]   Input Channels: %ld", (long)session.inputNumberOfChannels);
             NSLog(@"[iOSAudioBridge]   Output Channels: %ld", (long)session.outputNumberOfChannels);
 

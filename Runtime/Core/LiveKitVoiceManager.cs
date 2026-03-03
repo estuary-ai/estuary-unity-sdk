@@ -396,11 +396,15 @@ namespace Estuary
             // Create local audio track from microphone source
             _localAudioTrack = LocalAudioTrack.CreateAudioTrack("microphone", _microphoneSource, _room);
 
-            // Create publish options with proper audio encoding
+            // Create publish options with voice-optimized audio encoding.
+            // 32kbps is sufficient for mono speech (Opus codec), halving bandwidth vs 64kbps
+            // with no perceptible quality loss for voice. DTX (Discontinuous Transmission)
+            // reduces bandwidth during silence by not sending full frames.
             var options = new TrackPublishOptions();
             options.AudioEncoding = new AudioEncoding();
-            options.AudioEncoding.MaxBitrate = 64000;
+            options.AudioEncoding.MaxBitrate = 32000;
             options.Source = TrackSource.SourceMicrophone;
+            options.Dtx = true;
 
             // Publish the track
             var publishInstruction = _room.LocalParticipant.PublishTrack(_localAudioTrack, options);
@@ -786,6 +790,11 @@ namespace Estuary
                     _botAudioSource.volume = 1f;
                     _botAudioSource.priority = 0;  // Highest priority for voice
                     _botAudioSource.dopplerLevel = 0f;  // No doppler effect for voice
+                    _botAudioSource.bypassEffects = true;  // Skip audio effects pipeline for lower latency
+                    _botAudioSource.bypassListenerEffects = true;  // Skip listener effects
+                    _botAudioSource.bypassReverbZones = true;  // Skip reverb zones
+                    _botAudioSource.loop = false;  // Defensive: no looping
+                    _botAudioSource.playOnAwake = false;  // Defensive: no auto-play
                     
                     // Create AudioStream to play the remote audio track
                     // This is required by LiveKit SDK - it does NOT auto-play remote audio
