@@ -47,19 +47,6 @@ namespace Estuary
         [Tooltip("Voice communication mode. LiveKit provides lower latency WebRTC streaming.")]
         private VoiceMode voiceMode = VoiceMode.LiveKit;
 
-        [Header("Audio Settings")]
-        [SerializeField]
-        [Tooltip("Sample rate for microphone recording (16000 for both WebSocket and LiveKit)")]
-        private int recordingSampleRate = 16000;
-
-        [SerializeField]
-        [Tooltip("Expected sample rate for voice playback (48000 for Unity's native rate)")]
-        private int playbackSampleRate = 48000;
-
-        [SerializeField]
-        [Tooltip("Duration of audio chunks to send (in milliseconds)")]
-        private int audioChunkDurationMs = 100;
-
         [Header("Debug")]
         [SerializeField]
         [Tooltip("Enable debug logging")]
@@ -102,22 +89,6 @@ namespace Estuary
         public bool IsLiveKitEnabled => voiceMode == VoiceMode.LiveKit;
 
         /// <summary>
-        /// Sample rate for microphone recording.
-        /// Returns 16000 for both LiveKit and WebSocket modes (optimized for STT and latency).
-        /// </summary>
-        public int RecordingSampleRate => voiceMode == VoiceMode.LiveKit ? 16000 : recordingSampleRate;
-
-        /// <summary>
-        /// Sample rate for voice playback.
-        /// </summary>
-        public int PlaybackSampleRate => playbackSampleRate;
-
-        /// <summary>
-        /// Duration of audio chunks in milliseconds.
-        /// </summary>
-        public int AudioChunkDurationMs => audioChunkDurationMs;
-
-        /// <summary>
         /// Enable debug logging.
         /// </summary>
         public bool DebugLogging
@@ -138,21 +109,6 @@ namespace Estuary
                 Debug.LogWarning("[EstuaryConfig] API key should start with 'est_'");
             }
 
-            // Validate sample rates
-            if (recordingSampleRate != 16000)
-            {
-                Debug.LogWarning("[EstuaryConfig] Recording sample rate should be 16000 Hz for best STT results");
-            }
-
-            // Validate chunk duration
-            if (audioChunkDurationMs < 50)
-            {
-                Debug.LogWarning("[EstuaryConfig] Audio chunk duration too short, may cause high CPU usage");
-            }
-            else if (audioChunkDurationMs > 500)
-            {
-                Debug.LogWarning("[EstuaryConfig] Audio chunk duration too long, may cause latency");
-            }
         }
 
         #endregion

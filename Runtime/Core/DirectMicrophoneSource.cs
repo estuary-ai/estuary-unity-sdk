@@ -40,6 +40,10 @@ namespace Estuary
         private AudioClip _micClip;
         private int _lastReadPosition;
         private float[] _readBuffer;
+        private float[] _audioDataBuffer;      // Pre-allocated output buffer (reused each poll)
+        private float[] _firstPartBuffer;      // Pre-allocated wrap-around buffer (reused each poll)
+        private float[] _secondPartBuffer;     // Pre-allocated wrap-around buffer (reused each poll)
+        private float[] _rawDataBuffer;        // Pre-allocated simple-read buffer (reused each poll)
         private bool _started;
         private bool _disposed;
         private Coroutine _pollCoroutine;
@@ -103,9 +107,15 @@ namespace Estuary
             _deviceName = deviceName;
             _coroutineRunner = coroutineRunner;
             
-            // Allocate buffer for ~20ms of audio at 16kHz mono
+            // Pre-allocate buffers for ~20ms of audio at 16kHz mono
+            // Use 2x size for variable timing and wrap-around headroom
             int samplesPerPoll = (int)(SAMPLE_RATE * (POLL_INTERVAL_MS / 1000f));
-            _readBuffer = new float[samplesPerPoll * CHANNELS * 2]; // Extra space for variable timing
+            int initialSize = samplesPerPoll * CHANNELS * 2;
+            _readBuffer = new float[initialSize];
+            _audioDataBuffer = new float[initialSize];
+            _firstPartBuffer = new float[initialSize];
+            _secondPartBuffer = new float[initialSize];
+            _rawDataBuffer = new float[initialSize];
         }
         
         /// <summary>
@@ -248,12 +258,12 @@ namespace Estuary
         private void PollMicrophone()
         {
             if (_micClip == null || !_started) return;
-            
+
             int currentPosition = Microphone.GetPosition(_deviceName);
             if (currentPosition < 0) return;
-            
+
             int samplesToRead;
-            
+
             // Handle circular buffer wrap-around
             if (currentPosition < _lastReadPosition)
             {
@@ -264,56 +274,72 @@ namespace Estuary
             {
                 samplesToRead = currentPosition - _lastReadPosition;
             }
-            
+
             if (samplesToRead <= 0) return;
-            
-            // Ensure buffer is large enough
+
+            // Ensure pre-allocated buffers are large enough (only reallocate if too small, keep larger buffer)
             int totalSamples = samplesToRead * CHANNELS;
             if (_readBuffer.Length < totalSamples)
             {
-                _readBuffer = new float[totalSamples * 2]; // Double for safety
+                int newSize = totalSamples * 2;
+                _readBuffer = new float[newSize];
             }
-            
-            // Read audio data directly from the microphone clip
-            // This bypasses Unity's audio output DSP entirely
-            float[] audioData = new float[totalSamples];
-            
+            if (_audioDataBuffer.Length < totalSamples)
+            {
+                _audioDataBuffer = new float[totalSamples * 2];
+            }
+
+            // Clear the output region of the audio data buffer
+            Array.Clear(_audioDataBuffer, 0, totalSamples);
+
             if (currentPosition < _lastReadPosition)
             {
-                // Handle wrap-around: read in two parts
+                // Handle wrap-around: read in two parts using pre-allocated buffers
                 int firstPartSamples = _micClip.samples - _lastReadPosition;
-                float[] firstPart = new float[firstPartSamples * _micClip.channels];
-                float[] secondPart = new float[currentPosition * _micClip.channels];
-                
-                _micClip.GetData(firstPart, _lastReadPosition);
+                int firstPartTotal = firstPartSamples * _micClip.channels;
+                int secondPartTotal = currentPosition * _micClip.channels;
+
+                if (_firstPartBuffer.Length < firstPartTotal)
+                    _firstPartBuffer = new float[firstPartTotal * 2];
+                if (_secondPartBuffer.Length < secondPartTotal)
+                    _secondPartBuffer = new float[Math.Max(secondPartTotal * 2, 1)];
+
+                _micClip.GetData(_firstPartBuffer, _lastReadPosition);
                 if (currentPosition > 0)
                 {
-                    _micClip.GetData(secondPart, 0);
+                    _micClip.GetData(_secondPartBuffer, 0);
                 }
-                
-                // Copy to output buffer (mono)
-                CopyToOutput(firstPart, secondPart, audioData, _micClip.channels);
+
+                // Copy to output buffer (mono) — uses slices of pre-allocated buffers
+                CopyToOutput(_firstPartBuffer, firstPartTotal,
+                             _secondPartBuffer, currentPosition > 0 ? secondPartTotal : 0,
+                             _audioDataBuffer, totalSamples, _micClip.channels);
             }
             else
             {
-                // Simple read
-                float[] rawData = new float[samplesToRead * _micClip.channels];
-                _micClip.GetData(rawData, _lastReadPosition);
-                
+                // Simple read using pre-allocated buffer
+                int rawTotal = samplesToRead * _micClip.channels;
+                if (_rawDataBuffer.Length < rawTotal)
+                    _rawDataBuffer = new float[rawTotal * 2];
+
+                _micClip.GetData(_rawDataBuffer, _lastReadPosition);
+
                 // Copy to output buffer (mono)
-                CopyToOutput(rawData, null, audioData, _micClip.channels);
+                CopyToOutput(_rawDataBuffer, rawTotal,
+                             null, 0,
+                             _audioDataBuffer, totalSamples, _micClip.channels);
             }
-            
+
             _lastReadPosition = currentPosition;
             
             // Calculate volume for VAD (Voice Activity Detection)
-            _currentVolume = CalculateRMS(audioData);
-            
+            _currentVolume = CalculateRMS(_audioDataBuffer, totalSamples);
+
             // Apply VAD - filter out audio below threshold to prevent ambient conversations
             if (_vadEnabled)
             {
                 bool isSpeaking = _currentVolume >= _vadThreshold;
-                
+
                 // Fire speech detection events on state change
                 if (isSpeaking && !_wasSpeaking)
                 {
@@ -325,58 +351,80 @@ namespace Estuary
                     _wasSpeaking = false;
                     OnSilenceDetected?.Invoke();
                 }
-                
+
                 // If below threshold, replace audio with silence
                 // This prevents distant/ambient conversations from being sent to the server
                 if (!isSpeaking)
                 {
-                    Array.Clear(audioData, 0, audioData.Length);
+                    Array.Clear(_audioDataBuffer, 0, totalSamples);
                 }
             }
-            
+
             // Fire the AudioRead event with 16kHz mono
+            // We must pass an array sized exactly to the data length for LiveKit's native FFI
+            // Reuse _readBuffer as the correctly-sized output if it fits, otherwise slice
+            if (_readBuffer.Length >= totalSamples)
+            {
+                Array.Copy(_audioDataBuffer, 0, _readBuffer, 0, totalSamples);
+            }
             // This goes to RtcAudioSource.OnAudioRead which sends to native FFI with AEC
-            AudioRead?.Invoke(audioData, CHANNELS, SAMPLE_RATE);
+            AudioRead?.Invoke(
+                totalSamples == _audioDataBuffer.Length ? _audioDataBuffer : GetSlice(_audioDataBuffer, totalSamples),
+                CHANNELS, SAMPLE_RATE);
+        }
+
+        /// <summary>
+        /// Returns a correctly-sized slice from a larger buffer. Reuses a cached array when possible.
+        /// </summary>
+        private float[] _sliceCache;
+        private float[] GetSlice(float[] source, int length)
+        {
+            if (_sliceCache == null || _sliceCache.Length != length)
+                _sliceCache = new float[length];
+            Array.Copy(source, 0, _sliceCache, 0, length);
+            return _sliceCache;
         }
         
         /// <summary>
         /// Calculate RMS (Root Mean Square) volume of audio samples.
         /// RMS gives a more accurate representation of perceived loudness than peak amplitude.
         /// </summary>
-        /// <param name="samples">Audio samples to analyze</param>
+        /// <param name="samples">Audio samples buffer (may be larger than active data)</param>
+        /// <param name="length">Number of active samples to analyze</param>
         /// <returns>RMS volume level (0-1)</returns>
-        private float CalculateRMS(float[] samples)
+        private float CalculateRMS(float[] samples, int length)
         {
-            if (samples == null || samples.Length == 0) return 0f;
-            
+            if (samples == null || length <= 0) return 0f;
+
             float sum = 0f;
-            for (int i = 0; i < samples.Length; i++)
+            for (int i = 0; i < length; i++)
             {
                 sum += samples[i] * samples[i];
             }
-            return Mathf.Sqrt(sum / samples.Length);
+            return Mathf.Sqrt(sum / length);
         }
-        
+
         /// <summary>
         /// Copies audio data to the output buffer, handling mono/stereo conversion if needed.
-        /// Since we're using mono output (CHANNELS=1), we keep the data as-is for mono sources
-        /// or downmix stereo to mono.
+        /// Uses explicit lengths to avoid allocating new arrays — works with pre-allocated buffers.
         /// </summary>
-        private void CopyToOutput(float[] firstPart, float[] secondPart, float[] output, int sourceChannels)
+        private void CopyToOutput(float[] firstPart, int firstPartLength,
+                                  float[] secondPart, int secondPartLength,
+                                  float[] output, int outputLength, int sourceChannels)
         {
             int outputIndex = 0;
-            
+
             if (sourceChannels == 1)
             {
                 // Source is mono, output is mono - direct copy
-                for (int i = 0; i < firstPart.Length && outputIndex < output.Length; i++)
+                for (int i = 0; i < firstPartLength && outputIndex < outputLength; i++)
                 {
                     output[outputIndex++] = firstPart[i];
                 }
-                
-                if (secondPart != null)
+
+                if (secondPart != null && secondPartLength > 0)
                 {
-                    for (int i = 0; i < secondPart.Length && outputIndex < output.Length; i++)
+                    for (int i = 0; i < secondPartLength && outputIndex < outputLength; i++)
                     {
                         output[outputIndex++] = secondPart[i];
                     }
@@ -385,14 +433,14 @@ namespace Estuary
             else
             {
                 // Source is stereo, downmix to mono by averaging channels
-                for (int i = 0; i < firstPart.Length - 1 && outputIndex < output.Length; i += 2)
+                for (int i = 0; i < firstPartLength - 1 && outputIndex < outputLength; i += 2)
                 {
                     output[outputIndex++] = (firstPart[i] + firstPart[i + 1]) * 0.5f;
                 }
-                
-                if (secondPart != null)
+
+                if (secondPart != null && secondPartLength > 0)
                 {
-                    for (int i = 0; i < secondPart.Length - 1 && outputIndex < output.Length; i += 2)
+                    for (int i = 0; i < secondPartLength - 1 && outputIndex < outputLength; i += 2)
                     {
                         output[outputIndex++] = (secondPart[i] + secondPart[i + 1]) * 0.5f;
                     }

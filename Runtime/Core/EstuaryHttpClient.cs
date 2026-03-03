@@ -1,249 +1,191 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
-using Newtonsoft.Json;
 using Estuary.Models;
+using Newtonsoft.Json;
 
 namespace Estuary
 {
     /// <summary>
-    /// REST API client for Estuary HTTP endpoints.
-    /// Provides coroutine-based methods for image upload and model status polling.
-    ///
-    /// Usage: Instantiate with an EstuaryConfig, then run methods as coroutines via
-    /// MonoBehaviour.StartCoroutine().
-    ///
-    /// This is a plain C# class (not a MonoBehaviour) so it can be owned by any component.
+    /// HTTP client for Estuary REST API endpoints.
+    /// Uses UnityWebRequest for HTTP operations with API key authentication.
+    /// All methods are coroutines for use with StartCoroutine.
     /// </summary>
     public class EstuaryHttpClient
     {
-        private readonly EstuaryConfig _config;
+        readonly string _serverUrl;
+        readonly string _apiKey;
 
-        /// <summary>
-        /// Create a new HTTP client using the given configuration.
-        /// </summary>
-        /// <param name="config">EstuaryConfig providing ServerUrl and ApiKey.</param>
         public EstuaryHttpClient(EstuaryConfig config)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
+            _serverUrl = config.ServerUrl.TrimEnd('/');
+            _apiKey = config.ApiKey;
         }
 
         /// <summary>
-        /// Upload an image to generate a character via POST /api/generate/image-to-character.
-        /// Sends a multipart form with the image bytes and returns the created AgentResponse.
+        /// Uploads an image to generate a character via POST /api/generate/image-to-character.
+        /// Multipart form upload with "image" field.
         /// </summary>
-        /// <param name="imageBytes">Raw image bytes (PNG, JPG, or WebP).</param>
-        /// <param name="mimeType">MIME type of the image (e.g., "image/png", "image/jpeg", "image/webp").</param>
-        /// <param name="onSuccess">Called with the deserialized AgentResponse on success.</param>
-        /// <param name="onError">Called with a descriptive error message on failure.</param>
-        public IEnumerator UploadImageToCharacter(byte[] imageBytes, string mimeType,
+        public IEnumerator UploadImageToCharacter(
+            byte[] imageBytes, string mimeType,
             Action<AgentResponse> onSuccess, Action<string> onError)
         {
-            var url = $"{_config.ServerUrl}/api/generate/image-to-character";
+            var url = $"{_serverUrl}/api/generate/image-to-character";
 
-            // Determine file extension from MIME type
-            string ext;
-            switch (mimeType)
+            var form = new List<IMultipartFormSection>
             {
-                case "image/png":
-                    ext = "png";
-                    break;
-                case "image/webp":
-                    ext = "webp";
-                    break;
-                default:
-                    ext = "jpg";
-                    break;
-            }
-
-            if (_config.DebugLogging)
-            {
-                Debug.Log($"[EstuaryHttpClient] Uploading image to {url} ({imageBytes.Length} bytes, {mimeType})");
-            }
-
-            var formData = new List<IMultipartFormSection>
-            {
-                new MultipartFormFileSection("image", imageBytes, $"photo.{ext}", mimeType)
+                new MultipartFormFileSection("image", imageBytes, "photo.jpg", mimeType)
             };
 
-            using (var request = UnityWebRequest.Post(url, formData))
+            using (var request = UnityWebRequest.Post(url, form))
             {
-                request.SetRequestHeader("X-API-Key", _config.ApiKey);
+                request.SetRequestHeader("X-API-Key", _apiKey);
                 request.timeout = 30;
 
                 yield return request.SendWebRequest();
 
-                if (_config.DebugLogging)
-                {
-                    Debug.Log($"[EstuaryHttpClient] Upload response: {request.responseCode}");
-                }
-
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    var errorText = request.downloadHandler?.text ?? request.error;
-                    onError?.Invoke($"Upload failed ({request.responseCode}): {errorText}");
+                    onError?.Invoke(request.error);
                     yield break;
                 }
 
-                AgentResponse agent;
                 try
                 {
-                    agent = JsonConvert.DeserializeObject<AgentResponse>(request.downloadHandler.text);
+                    var response = JsonConvert.DeserializeObject<AgentResponse>(
+                        request.downloadHandler.text);
+                    onSuccess?.Invoke(response);
                 }
-                catch (JsonException ex)
+                catch (Exception e)
                 {
-                    onError?.Invoke($"Failed to parse upload response: {ex.Message}");
-                    yield break;
+                    onError?.Invoke($"Failed to parse response: {e.Message}");
                 }
-
-                onSuccess?.Invoke(agent);
             }
         }
 
         /// <summary>
-        /// Get the current model generation status for an agent via GET /api/generate/{agentId}/model-status.
+        /// Gets the current model generation status via GET /api/generate/{agentId}/model-status.
         /// </summary>
-        /// <param name="agentId">The agent UUID returned from image-to-character.</param>
-        /// <param name="onSuccess">Called with the deserialized ModelStatusResponse on success.</param>
-        /// <param name="onError">Called with a descriptive error message on failure.</param>
-        public IEnumerator GetModelStatus(string agentId, Action<ModelStatusResponse> onSuccess,
-            Action<string> onError)
+        public IEnumerator GetModelStatus(
+            string agentId,
+            Action<ModelStatusResponse> onSuccess, Action<string> onError)
         {
-            var url = $"{_config.ServerUrl}/api/generate/{agentId}/model-status";
-
-            if (_config.DebugLogging)
-            {
-                Debug.Log($"[EstuaryHttpClient] Getting model status from {url}");
-            }
+            var url = $"{_serverUrl}/api/generate/{agentId}/model-status";
 
             using (var request = UnityWebRequest.Get(url))
             {
-                request.SetRequestHeader("X-API-Key", _config.ApiKey);
+                request.SetRequestHeader("X-API-Key", _apiKey);
                 request.timeout = 10;
 
                 yield return request.SendWebRequest();
 
-                if (_config.DebugLogging)
-                {
-                    Debug.Log($"[EstuaryHttpClient] Model status response: {request.responseCode}");
-                }
-
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    var errorText = request.downloadHandler?.text ?? request.error;
-                    onError?.Invoke($"Get model status failed ({request.responseCode}): {errorText}");
+                    onError?.Invoke(request.error);
                     yield break;
                 }
 
-                ModelStatusResponse status;
                 try
                 {
-                    status = JsonConvert.DeserializeObject<ModelStatusResponse>(request.downloadHandler.text);
+                    var response = JsonConvert.DeserializeObject<ModelStatusResponse>(
+                        request.downloadHandler.text);
+                    onSuccess?.Invoke(response);
                 }
-                catch (JsonException ex)
+                catch (Exception e)
                 {
-                    onError?.Invoke($"Failed to parse model status response: {ex.Message}");
-                    yield break;
+                    onError?.Invoke($"Failed to parse response: {e.Message}");
                 }
-
-                onSuccess?.Invoke(status);
             }
         }
 
         /// <summary>
-        /// Poll model generation status with exponential backoff until completion or failure.
-        /// Invokes onStatusChanged whenever the status transitions, onCompleted when the model
-        /// is fully generated, and onError on any failure (network error, terminal failure status,
-        /// or missing model configuration).
+        /// Downloads a GLB file from a URL and returns the raw bytes.
+        /// Accepts both full URLs (e.g. S3) and relative paths (e.g. /static/agent_models/...).
+        /// Relative paths are resolved against _serverUrl.
+        /// No API key header needed -- these are not authenticated API endpoints.
         /// </summary>
-        /// <param name="agentId">The agent UUID to poll.</param>
-        /// <param name="onStatusChanged">Called each time the model status changes (e.g., generating -> preview_ready).</param>
-        /// <param name="onCompleted">Called when model generation reaches "completed" status.</param>
-        /// <param name="onError">Called on network error, parse error, or terminal failure status.</param>
-        /// <param name="initialInterval">Initial polling interval in seconds (default 2s).</param>
-        /// <param name="maxInterval">Maximum polling interval in seconds (default 10s).</param>
-        public IEnumerator PollModelStatus(string agentId,
-            Action<ModelStatusResponse> onStatusChanged, Action<ModelStatusResponse> onCompleted,
-            Action<string> onError, float initialInterval = 2f, float maxInterval = 10f)
+        /// <param name="url">URL to the GLB file (full or relative path)</param>
+        /// <param name="onSuccess">Called with raw GLB bytes on successful download</param>
+        /// <param name="onError">Called with error message on failure</param>
+        public IEnumerator DownloadGlb(string url, Action<byte[]> onSuccess, Action<string> onError)
+        {
+            // Resolve relative paths against server URL
+            var resolvedUrl = url.StartsWith("/") ? _serverUrl.TrimEnd('/') + url : url;
+
+            using (var request = UnityWebRequest.Get(resolvedUrl))
+            {
+                request.timeout = 60; // GLBs can be several MB on mobile networks
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    onError?.Invoke(request.error);
+                    yield break;
+                }
+
+                onSuccess?.Invoke(request.downloadHandler.data);
+            }
+        }
+
+        /// <summary>
+        /// Polls model status at regular intervals until completion or failure.
+        /// Calls onStatusChanged when status transitions, onCompleted when done,
+        /// onError on network or terminal failure.
+        /// </summary>
+        public IEnumerator PollModelStatus(
+            string agentId,
+            Action<ModelStatusResponse> onStatusChanged,
+            Action<ModelStatusResponse> onCompleted,
+            Action<string> onError,
+            float initialInterval = 2f,
+            float maxInterval = 10f)
         {
             var interval = initialInterval;
             string lastStatus = null;
-
-            if (_config.DebugLogging)
-            {
-                Debug.Log($"[EstuaryHttpClient] Starting model status polling for agent {agentId} (interval={initialInterval}s, max={maxInterval}s)");
-            }
+            int lastProgress = -1;
 
             while (true)
             {
                 yield return new WaitForSeconds(interval);
 
-                var url = $"{_config.ServerUrl}/api/generate/{agentId}/model-status";
+                ModelStatusResponse status = null;
+                string error = null;
 
-                using (var request = UnityWebRequest.Get(url))
+                yield return GetModelStatus(agentId,
+                    s => status = s,
+                    e => error = e);
+
+                if (error != null)
                 {
-                    request.SetRequestHeader("X-API-Key", _config.ApiKey);
-                    request.timeout = 10;
+                    onError?.Invoke(error);
+                    yield break;
+                }
 
-                    yield return request.SendWebRequest();
+                // Notify on status or progress change
+                if (status.ModelStatus != lastStatus || status.Progress != lastProgress)
+                {
+                    lastStatus = status.ModelStatus;
+                    lastProgress = status.Progress;
+                    onStatusChanged?.Invoke(status);
+                }
 
-                    if (request.result != UnityWebRequest.Result.Success)
-                    {
-                        var errorText = request.downloadHandler?.text ?? request.error;
-                        onError?.Invoke($"Poll model status failed ({request.responseCode}): {errorText}");
-                        yield break;
-                    }
+                // Terminal states
+                // texture_failed = partial success (preview is usable, textures didn't apply)
+                // Treat as completion so the model viewer can display preview with a notice.
+                if (status.IsCompleted || status.IsTextureFailed)
+                {
+                    onCompleted?.Invoke(status);
+                    yield break;
+                }
 
-                    ModelStatusResponse status;
-                    try
-                    {
-                        status = JsonConvert.DeserializeObject<ModelStatusResponse>(request.downloadHandler.text);
-                    }
-                    catch (JsonException ex)
-                    {
-                        onError?.Invoke($"Failed to parse poll response: {ex.Message}");
-                        yield break;
-                    }
-
-                    // Check for null/missing model status (agent has no 3D model configured)
-                    if (string.IsNullOrEmpty(status.ModelStatus))
-                    {
-                        onError?.Invoke("Agent has no 3D model status — model generation may not be configured");
-                        yield break;
-                    }
-
-                    // Notify on status change
-                    if (status.ModelStatus != lastStatus)
-                    {
-                        if (_config.DebugLogging)
-                        {
-                            Debug.Log($"[EstuaryHttpClient] Model status changed: {lastStatus ?? "(none)"} -> {status.ModelStatus}");
-                        }
-
-                        lastStatus = status.ModelStatus;
-                        onStatusChanged?.Invoke(status);
-                    }
-
-                    // Terminal: completed
-                    if (status.IsCompleted)
-                    {
-                        if (_config.DebugLogging)
-                        {
-                            Debug.Log($"[EstuaryHttpClient] Model generation completed for agent {agentId}");
-                        }
-
-                        onCompleted?.Invoke(status);
-                        yield break;
-                    }
-
-                    // Terminal: failed
-                    if (status.IsFailed)
-                    {
-                        onError?.Invoke($"Model generation failed with status: {status.ModelStatus}");
-                        yield break;
-                    }
+                if (status.IsFailed)
+                {
+                    onError?.Invoke($"Model generation failed with status: {status.ModelStatus}");
+                    yield break;
                 }
 
                 // Exponential backoff
