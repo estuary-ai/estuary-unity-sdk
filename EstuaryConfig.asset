@@ -12,10 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cd6b71dcdf1be40ab971dd203e96b9c2, type: 3}
   m_Name: EstuaryConfig
   m_EditorClassIdentifier: 
-  serverUrl: http://localhost:4001
+  serverUrl: http://192.168.8.202:4001
   apiKey: est_HvPTzH4cuiNenaliEqyHJ8ErnWAbh8-0pKB-dTZ4sBQ
   voiceMode: 1
-  recordingSampleRate: 16000
-  playbackSampleRate: 24000
-  audioChunkDurationMs: 100
   debugLogging: 1
