@@ -54,7 +54,7 @@ namespace Estuary
         /// <summary>
         /// Check if an instance exists without creating one.
         /// </summary>
-        public static bool HasInstance => _instance != null;
+        public static bool HasInstance => !_applicationQuitting && _instance != null;
 
         #endregion
 
