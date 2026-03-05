@@ -183,6 +183,71 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Gets all agents/characters for the authenticated user via GET /api/agents.
+        /// Returns a simple JSON array (no pagination).
+        /// </summary>
+        public IEnumerator GetAgents(Action<List<AgentResponse>> onSuccess, Action<string> onError)
+        {
+            string token = null;
+            yield return ResolveToken(t => token = t);
+
+            var url = $"{_serverUrl}/api/agents";
+
+            using (var request = UnityWebRequest.Get(url))
+            {
+                ApplyAuth(request, token);
+                request.timeout = 10;
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    onError?.Invoke(request.error);
+                    yield break;
+                }
+
+                try
+                {
+                    var agents = JsonConvert.DeserializeObject<List<AgentResponse>>(
+                        request.downloadHandler.text);
+                    onSuccess?.Invoke(agents);
+                }
+                catch (Exception e)
+                {
+                    onError?.Invoke($"Failed to parse response: {e.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Deletes an agent/character via DELETE /api/agents/{agentId}.
+        /// Returns 204 on success, 404 if not found or not owned by user.
+        /// </summary>
+        public IEnumerator DeleteAgent(string agentId, Action onSuccess, Action<string> onError)
+        {
+            string token = null;
+            yield return ResolveToken(t => token = t);
+
+            var url = $"{_serverUrl}/api/agents/{agentId}";
+
+            using (var request = UnityWebRequest.Delete(url))
+            {
+                ApplyAuth(request, token);
+                request.timeout = 10;
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    onError?.Invoke(request.error);
+                    yield break;
+                }
+
+                onSuccess?.Invoke();
+            }
+        }
+
+        /// <summary>
         /// Polls model status at regular intervals until completion or failure.
         /// Calls onStatusChanged when status transitions, onCompleted when done,
         /// onError on network or terminal failure.
