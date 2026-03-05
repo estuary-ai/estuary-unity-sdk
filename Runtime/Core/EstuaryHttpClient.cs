@@ -19,13 +19,19 @@ namespace Estuary
     {
         readonly string _serverUrl;
         readonly string _apiKey;
-        readonly Func<Task<string>> _tokenProvider;
+        readonly EstuaryConfig _config;
+
+        /// <summary>
+        /// Optional player identity sent as X-Player-Id on every request.
+        /// Used by third-party apps to scope API results per end-user.
+        /// </summary>
+        public string PlayerId { get; set; }
 
         public EstuaryHttpClient(EstuaryConfig config)
         {
             _serverUrl = config.ServerUrl.TrimEnd('/');
             _apiKey = config.ApiKey;
-            _tokenProvider = config.TokenProvider;
+            _config = config;
         }
 
         /// <summary>
@@ -34,13 +40,14 @@ namespace Estuary
         /// </summary>
         private IEnumerator ResolveToken(Action<string> onToken)
         {
-            if (_tokenProvider == null)
+            var tokenProvider = _config?.TokenProvider;
+            if (tokenProvider == null)
             {
                 onToken?.Invoke(null);
                 yield break;
             }
 
-            var tokenTask = _tokenProvider();
+            var tokenTask = tokenProvider();
             while (!tokenTask.IsCompleted)
                 yield return null;
 
@@ -56,7 +63,7 @@ namespace Estuary
 
         /// <summary>
         /// Applies auth header to a UnityWebRequest.
-        /// Uses Bearer token if available, otherwise X-API-Key.
+        /// Uses Bearer token if available, otherwise X-API-Key (only when no token provider is configured).
         /// </summary>
         private void ApplyAuth(UnityWebRequest request, string token)
         {
@@ -64,9 +71,17 @@ namespace Estuary
             {
                 request.SetRequestHeader("Authorization", $"Bearer {token}");
             }
-            else if (!string.IsNullOrEmpty(_apiKey))
+            else if (_config?.TokenProvider == null && !string.IsNullOrEmpty(_apiKey))
             {
+                // Only use API key when no token provider is configured (server-to-server / legacy SDK).
+                // When a token provider exists (per-user Firebase auth), falling back to the
+                // API key would silently escalate to developer-level access.
                 request.SetRequestHeader("X-API-Key", _apiKey);
+            }
+
+            if (!string.IsNullOrEmpty(PlayerId))
+            {
+                request.SetRequestHeader("X-Player-Id", PlayerId);
             }
         }
 
