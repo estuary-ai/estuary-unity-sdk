@@ -91,3 +91,9 @@ OnQuotaExceeded(QuotaExceededData)
 - LiveKit uses the official Unity SDK package `io.livekit.livekit-sdk`
 - Audio format: PCM 16-bit, sample rate configurable (default 16kHz for STT compatibility)
 - Works across Unity platforms (Editor, Android, iOS, Windows, macOS) but LiveKit availability depends on platform support
+
+## Documentation Maintenance
+
+- When modifying SDK features, installation steps, or dependencies: update both `README.md` and `estuary-docs/docs/unity-sdk/` docs to keep them in sync
+- LiveKit is a **required** dependency — never document it as optional
+- Do not reference the `LIVEKIT_AVAILABLE` scripting define — it does not exist in the codebase
