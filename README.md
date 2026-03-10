@@ -17,16 +17,23 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 
 - Unity 2021.3 LTS or newer
 - .NET Standard 2.1 or .NET 4.x
-- For LiveKit mode: [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity)
+- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v1.3.3+
 
 ## Installation
 
 ### Option 1: Unity Package Manager (Recommended)
 
+Unity Package Manager does not resolve transitive Git URL dependencies, so you must add the LiveKit SDK first.
+
 1. Open the Package Manager window (`Window > Package Manager`)
 2. Click the `+` button in the top-left corner
 3. Select `Add package from git URL...`
-4. Enter the following URL:
+4. Add the **LiveKit SDK** first:
+   ```
+   https://github.com/livekit/client-sdk-unity.git#v1.3.3
+   ```
+5. Click `+` > `Add package from git URL...` again
+6. Add the **Estuary SDK**:
    ```
    https://github.com/Estuary-AI/estuary-unity-sdk.git
    ```
@@ -35,19 +42,7 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 
 1. Clone or download this repository
 2. Copy the contents into your Unity project's `Packages/com.estuary.sdk/` directory
-
-### Installing LiveKit (Optional but Recommended)
-
-For low-latency voice with echo cancellation:
-
-1. Add the LiveKit Unity SDK via Package Manager:
-   ```
-   https://github.com/livekit/client-sdk-unity.git
-   ```
-2. Add the `LIVEKIT_AVAILABLE` scripting define symbol:
-   - Go to `Edit > Project Settings > Player`
-   - Find `Scripting Define Symbols`
-   - Add `LIVEKIT_AVAILABLE`
+3. Ensure the [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) is also installed
 
 ## Quick Start
 
@@ -418,7 +413,7 @@ var config = EstuaryConfig.CreateForDevelopment("est_your_key", "http://localhos
 
 ### LiveKit Issues
 
-1. **"LiveKit SDK not available"**: Add `LIVEKIT_AVAILABLE` to scripting defines
+1. **"LiveKit SDK not available"**: Install the LiveKit Unity SDK via Package Manager (see [Installation](#installation))
 2. **Connection failed**: Ensure LiveKit server is running and accessible
 
 ## Sample Projects
