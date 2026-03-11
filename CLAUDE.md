@@ -91,6 +91,7 @@ OnQuotaExceeded(QuotaExceededData)
 - LiveKit uses the official Unity SDK package `io.livekit.livekit-sdk`
 - Audio format: PCM 16-bit, sample rate configurable (default 16kHz for STT compatibility)
 - Works across Unity platforms (Editor, Android, iOS, Windows, macOS) but LiveKit availability depends on platform support
+- **Auto-installer:** `Editor/EstuaryDependencyInstaller.cs` is an `[InitializeOnLoad]` script in the `Estuary.Editor` assembly (which has `"references": []` and compiles independently of the Runtime assembly). On domain reload it checks if `io.livekit.livekit-sdk` is installed and offers to add it via `PackageManager.Client.Add()`. Uses `SessionState` to avoid repeated prompts per Editor session.
 
 ## Documentation Maintenance
 

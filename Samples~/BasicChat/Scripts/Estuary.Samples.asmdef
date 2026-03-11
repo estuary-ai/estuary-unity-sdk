@@ -2,7 +2,7 @@
     "name": "Estuary.Samples",
     "rootNamespace": "Estuary.Samples",
     "references": [
-        "Estuary"
+        "GUID:5664c917d38d8461186fd9696a5fe831"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -38,6 +38,8 @@ Unity Package Manager does not resolve transitive Git URL dependencies, so you m
    https://github.com/Estuary-AI/estuary-unity-sdk.git
    ```
 
+> **Auto-installer:** If you skip step 4, the SDK includes an Editor auto-installer that will detect the missing LiveKit dependency and offer to install it for you. However, adding LiveKit first (as shown above) is the recommended approach.
+
 ### Option 2: Manual Installation
 
 1. Clone or download this repository
