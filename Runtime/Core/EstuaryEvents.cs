@@ -4,6 +4,17 @@ using Estuary.Models;
 namespace Estuary
 {
     /// <summary>
+    /// Token response data from the server for LiveKit room connections.
+    /// </summary>
+    [Serializable]
+    public class LiveKitTokenResponse
+    {
+        public string token;
+        public string url;
+        public string room;
+    }
+
+    /// <summary>
     /// Event arguments for Estuary SDK events.
     /// </summary>
     public static class EstuaryEvents

@@ -1,8 +1,9 @@
 {
-    "name": "Estuary",
+    "name": "Estuary.LiveKit",
     "rootNamespace": "Estuary",
     "references": [
-        "Unity.TextMeshPro"
+        "Estuary",
+        "LiveKit"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -10,7 +11,9 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
+    "defineConstraints": [
+        "ESTUARY_LIVEKIT"
+    ],
     "versionDefines": [
         {
             "name": "io.livekit.livekit-sdk",
