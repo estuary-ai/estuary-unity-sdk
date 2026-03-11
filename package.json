@@ -25,8 +25,7 @@
   },
   "dependencies": {
     "com.unity.nuget.newtonsoft-json": "3.2.1",
-    "com.unity.textmeshpro": "3.0.6",
-    "io.livekit.livekit-sdk": "https://github.com/livekit/client-sdk-unity.git#v1.3.3"
+    "com.unity.textmeshpro": "3.0.6"
   },
   "samples": [
     {
