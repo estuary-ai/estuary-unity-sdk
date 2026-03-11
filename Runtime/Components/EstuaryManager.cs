@@ -117,18 +117,18 @@ namespace Estuary
         /// <summary>
         /// Whether LiveKit is ready for voice communication.
         /// </summary>
-        public bool IsLiveKitReady => _liveKitState == LiveKitConnectionState.Ready;
+        public bool IsLiveKitReady => LiveKitBridge.IsAvailable && _liveKitState == LiveKitConnectionState.Ready;
 
         /// <summary>
-        /// Whether LiveKit mode is enabled in the configuration.
+        /// Whether LiveKit mode is enabled in the configuration and available.
         /// </summary>
-        public bool IsLiveKitEnabled => config != null && config.IsLiveKitEnabled;
+        public bool IsLiveKitEnabled => config != null && config.IsLiveKitEnabled && LiveKitBridge.IsAvailable;
 
         /// <summary>
-        /// Get the LiveKitVoiceManager for advanced usage.
-        /// Returns null if not in LiveKit mode.
+        /// Get the LiveKit voice manager for advanced usage.
+        /// Returns null if LiveKit is not available or not in LiveKit mode.
         /// </summary>
-        public LiveKitVoiceManager LiveKitManager => _liveKitManager;
+        public ILiveKitVoiceManager LiveKitManager => _liveKitManager;
 
         /// <summary>
         /// Whether voice mode (backend STT) is currently active.
@@ -179,7 +179,7 @@ namespace Estuary
         #region Private Fields
 
         private EstuaryClient _client;
-        private LiveKitVoiceManager _liveKitManager;
+        private ILiveKitVoiceManager _liveKitManager;
         private LiveKitConnectionState _liveKitState = LiveKitConnectionState.Disconnected;
         private LiveKitTokenResponse _pendingLiveKitToken;
         private readonly Dictionary<string, EstuaryCharacter> _registeredCharacters = new Dictionary<string, EstuaryCharacter>();
@@ -658,20 +658,25 @@ namespace Estuary
             _client.OnLiveKitReady += HandleLiveKitRoomReady;
             _client.OnLiveKitError += HandleLiveKitError;
 
-            // Create LiveKit manager
-            _liveKitManager = new LiveKitVoiceManager
+            // Create LiveKit manager via bridge (null if LiveKit SDK is not installed)
+            _liveKitManager = LiveKitBridge.CreateVoiceManager();
+            if (_liveKitManager != null)
             {
-                DebugLogging = debugLogging
-            };
+                _liveKitManager.DebugLogging = debugLogging;
 
-            // Set this MonoBehaviour as the coroutine runner for LiveKit
-            _liveKitManager.SetCoroutineRunner(this);
+                // Set this MonoBehaviour as the coroutine runner for LiveKit
+                _liveKitManager.SetCoroutineRunner(this);
 
-            // Subscribe to LiveKit manager events
-            _liveKitManager.OnConnected += HandleLiveKitConnected;
-            _liveKitManager.OnDisconnected += HandleLiveKitDisconnected;
-            _liveKitManager.OnError += HandleLiveKitManagerError;
-            _liveKitManager.OnBotAudioSourceCreated += HandleBotAudioSourceCreated;
+                // Subscribe to LiveKit manager events
+                _liveKitManager.OnConnected += HandleLiveKitConnected;
+                _liveKitManager.OnDisconnected += HandleLiveKitDisconnected;
+                _liveKitManager.OnError += HandleLiveKitManagerError;
+                _liveKitManager.OnBotAudioSourceCreated += HandleBotAudioSourceCreated;
+            }
+            else
+            {
+                Debug.Log("[EstuaryManager] LiveKit SDK not available - voice will use WebSocket mode only");
+            }
 
             Log("EstuaryManager initialized");
         }

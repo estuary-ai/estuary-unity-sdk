@@ -185,7 +185,7 @@ namespace Estuary
         {
             get
             {
-                return true;
+                return LiveKitBridge.IsAvailable;
             }
         }
 
@@ -230,8 +230,8 @@ namespace Estuary
         private float _lastFrameTime;
 
         // LiveKit video manager
-        private LiveKitVideoManager _videoManager;
-        private LiveKitVoiceManager _voiceManager;
+        private ILiveKitVideoManager _videoManager;
+        private ILiveKitVoiceManager _voiceManager;
 
         #endregion
 
@@ -264,11 +264,13 @@ namespace Estuary
             // Pre-create frame texture for WebSocket mode
             _frameTexture = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
             
-            // Create video manager
-            _videoManager = new LiveKitVideoManager();
-            _videoManager.DebugLogging = debugLogging;
-            _videoManager.SetCoroutineRunner(this);
-            _videoManager.OnError += HandleVideoManagerError;
+            // Create video manager via bridge (null if LiveKit SDK is not installed)
+            _videoManager = LiveKitBridge.CreateVideoManager();
+            if (_videoManager != null)
+            {
+                _videoManager.DebugLogging = debugLogging;
+                _videoManager.SetCoroutineRunner(this);
+            }
         }
 
         private void Start()
@@ -340,17 +342,8 @@ namespace Estuary
         {
             if (!EstuaryManager.HasInstance)
                 return LiveKitConnectionState.Disconnected;
-            
-            var managerType = typeof(EstuaryManager);
-            var stateField = managerType.GetField("_liveKitState",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            
-            if (stateField != null)
-            {
-                return (LiveKitConnectionState)stateField.GetValue(EstuaryManager.Instance);
-            }
-            
-            return LiveKitConnectionState.Disconnected;
+
+            return EstuaryManager.Instance.LiveKitState;
         }
 
         private void OnLiveKitStateChanged(LiveKitConnectionState state)
@@ -403,24 +396,17 @@ namespace Estuary
         {
             if (!EstuaryManager.HasInstance)
                 return null;
-            
-            // Try to get active character via reflection
-            var managerType = typeof(EstuaryManager);
-            var activeCharField = managerType.GetField("_activeCharacter",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            
-            if (activeCharField != null)
+
+            // Use public property instead of reflection
+            var activeChar = EstuaryManager.Instance.ActiveCharacter;
+            if (activeChar != null)
             {
-                var activeChar = activeCharField.GetValue(EstuaryManager.Instance) as EstuaryCharacter;
-                if (activeChar != null)
-                {
-                    // Use character + player ID to create a unique session ID for webcam
-                    string sessionId = $"webcam_{activeChar.CharacterId}_{activeChar.PlayerId}";
-                    Debug.Log($"[EstuaryWebcam] Generated session ID from active character: {sessionId}");
-                    return sessionId;
-                }
+                // Use character + player ID to create a unique session ID for webcam
+                string sessionId = $"webcam_{activeChar.CharacterId}_{activeChar.PlayerId}";
+                Debug.Log($"[EstuaryWebcam] Generated session ID from active character: {sessionId}");
+                return sessionId;
             }
-            
+
             // Fallback: generate a random session ID
             string fallbackId = $"webcam_{System.Guid.NewGuid():N}";
             Debug.Log($"[EstuaryWebcam] Generated fallback session ID: {fallbackId}");
@@ -454,7 +440,6 @@ namespace Estuary
 
             if (_videoManager != null)
             {
-                _videoManager.OnError -= HandleVideoManagerError;
                 _videoManager.Dispose();
                 _videoManager = null;
             }
@@ -843,20 +828,8 @@ namespace Estuary
 
         private object GetLiveKitRoom()
         {
-            // Access the room from voice manager via reflection
-            if (_voiceManager == null)
-                return null;
-
-            var vmType = typeof(LiveKitVoiceManager);
-            var roomField = vmType.GetField("_room",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            if (roomField != null)
-            {
-                return roomField.GetValue(_voiceManager);
-            }
-
-            return null;
+            // Get room from voice manager via interface method (no reflection needed)
+            return _voiceManager?.GetRoom();
         }
 
         #endregion
@@ -1025,18 +998,9 @@ namespace Estuary
             return null;
         }
 
-        private LiveKitVoiceManager GetVoiceManagerFromManager()
+        private ILiveKitVoiceManager GetVoiceManagerFromManager()
         {
-            var managerType = typeof(EstuaryManager);
-            var vmField = managerType.GetField("_liveKitManager",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            if (vmField != null)
-            {
-                return vmField.GetValue(EstuaryManager.Instance) as LiveKitVoiceManager;
-            }
-
-            return null;
+            return EstuaryManager.Instance?.LiveKitManager;
         }
 
         /// <summary>

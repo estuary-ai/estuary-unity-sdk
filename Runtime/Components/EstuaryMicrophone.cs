@@ -160,7 +160,7 @@ namespace Estuary
         private bool _wasSpeaking;
 
         // LiveKit mode fields
-        private LiveKitVoiceManager _liveKitManager;
+        private ILiveKitVoiceManager _liveKitManager;
         private bool _useLiveKit;
 
         // VAD-only fields for LiveKit mode (parallel Unity microphone capture)
@@ -334,8 +334,8 @@ namespace Estuary
         /// Set the LiveKit voice manager for WebRTC audio streaming.
         /// When set, audio will be captured natively by WebRTC with AEC enabled.
         /// </summary>
-        /// <param name="manager">The LiveKitVoiceManager to use</param>
-        public void SetLiveKitManager(LiveKitVoiceManager manager)
+        /// <param name="manager">The ILiveKitVoiceManager to use</param>
+        public void SetLiveKitManager(ILiveKitVoiceManager manager)
         {
             _liveKitManager = manager;
             _useLiveKit = manager != null;
@@ -358,7 +358,7 @@ namespace Estuary
         /// </summary>
         /// <param name="voiceMode">The voice mode to use</param>
         /// <param name="liveKitManager">LiveKit manager (required if voiceMode is LiveKit)</param>
-        public void Configure(VoiceMode voiceMode, LiveKitVoiceManager liveKitManager = null)
+        public void Configure(VoiceMode voiceMode, ILiveKitVoiceManager liveKitManager = null)
         {
             _useLiveKit = voiceMode == VoiceMode.LiveKit && liveKitManager != null;
             _liveKitManager = liveKitManager;

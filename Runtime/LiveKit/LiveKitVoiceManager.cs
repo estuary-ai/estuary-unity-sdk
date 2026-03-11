@@ -10,22 +10,12 @@ using LiveKit.Proto;
 namespace Estuary
 {
     /// <summary>
-    /// Token response data from the server.
-    /// </summary>
-    [Serializable]
-    public class LiveKitTokenResponse
-    {
-        public string token;
-        public string url;
-        public string room;
-    }
-
-    /// <summary>
     /// Manages LiveKit WebRTC connections for real-time voice chat.
     /// Uses native WebRTC microphone capture for proper AEC (Acoustic Echo Cancellation).
     /// Handles room connections, audio track publishing, and audio track subscription.
+    /// Implements ILiveKitVoiceManager for use by core components via LiveKitBridge.
     /// </summary>
-    public class LiveKitVoiceManager : IDisposable
+    public class LiveKitVoiceManager : ILiveKitVoiceManager
     {
         #region Events
 
@@ -744,6 +734,15 @@ namespace Estuary
                     Debug.LogException(e);
                 }
             }
+        }
+
+        /// <summary>
+        /// Get the underlying LiveKit Room object for sharing with other managers (e.g., video).
+        /// Returns null if not connected.
+        /// </summary>
+        public object GetRoom()
+        {
+            return _room;
         }
 
         #endregion
