@@ -273,15 +273,24 @@ namespace Estuary
             Action<ModelStatusResponse> onCompleted,
             Action<string> onError,
             float initialInterval = 2f,
-            float maxInterval = 10f)
+            float maxInterval = 10f,
+            float maxDuration = 300f)
         {
             var interval = initialInterval;
             string lastStatus = null;
             int lastProgress = -1;
+            float elapsed = 0f;
 
             while (true)
             {
                 yield return new WaitForSeconds(interval);
+                elapsed += interval;
+
+                if (elapsed >= maxDuration)
+                {
+                    onError?.Invoke("Model generation timed out");
+                    yield break;
+                }
 
                 ModelStatusResponse status = null;
                 string error = null;
