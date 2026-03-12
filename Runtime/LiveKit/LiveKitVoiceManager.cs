@@ -908,10 +908,26 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Immediately stops bot audio playback. Call before disconnect to prevent buzzing.
+        /// </summary>
+        public void StopBotAudio()
+        {
+            if (_botAudioSource != null)
+                _botAudioSource.Stop();
+        }
+
+        /// <summary>
         /// Clean up the bot audio stream and associated GameObjects.
         /// </summary>
         private void CleanupBotAudioStream()
         {
+            // Stop AudioSource FIRST to halt audio thread callbacks before
+            // disposing the stream or destroying the GameObject
+            if (_botAudioSource != null)
+            {
+                _botAudioSource.Stop();
+            }
+
             if (_botAudioStream != null)
             {
                 try
@@ -924,13 +940,13 @@ namespace Estuary
                 }
                 _botAudioStream = null;
             }
-            
+
             if (_botAudioGameObject != null)
             {
                 UnityEngine.Object.Destroy(_botAudioGameObject);
                 _botAudioGameObject = null;
             }
-            
+
             _botAudioSource = null;
         }
 
