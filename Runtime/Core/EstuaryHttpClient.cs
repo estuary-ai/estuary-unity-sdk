@@ -168,6 +168,48 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Triggers 3D model generation for an existing agent via POST /api/generate/{agentId}/generate-model.
+        /// Also serves as retry when previous generation failed.
+        /// </summary>
+        public IEnumerator GenerateModel(
+            string agentId,
+            Action<ModelStatusResponse> onSuccess, Action<string> onError)
+        {
+            string token = null;
+            yield return ResolveToken(t => token = t);
+
+            var url = $"{_serverUrl}/api/generate/{agentId}/generate-model";
+
+            using (var request = new UnityWebRequest(url, "POST"))
+            {
+                request.uploadHandler = new UploadHandlerRaw(new byte[0]);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                ApplyAuth(request, token);
+                request.timeout = 30;
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    onError?.Invoke(request.error);
+                    yield break;
+                }
+
+                try
+                {
+                    var response = JsonConvert.DeserializeObject<ModelStatusResponse>(
+                        request.downloadHandler.text);
+                    onSuccess?.Invoke(response);
+                }
+                catch (Exception e)
+                {
+                    onError?.Invoke($"Failed to parse response: {e.Message}");
+                }
+            }
+        }
+
+        /// <summary>
         /// Downloads a GLB file from a URL and returns the raw bytes.
         /// Accepts both full URLs (e.g. S3) and relative paths (e.g. /static/agent_models/...).
         /// Relative paths are resolved against _serverUrl.
