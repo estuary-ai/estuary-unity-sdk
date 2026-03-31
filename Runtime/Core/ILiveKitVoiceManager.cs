@@ -74,6 +74,13 @@ namespace Estuary
         /// </summary>
         bool IsBotAudioMuted { get; }
 
+        /// <summary>
+        /// Output volume for bot audio (0.0 to 1.0). Default 1.0.
+        /// Applied to the bot AudioSource. When bot audio is muted (interrupt),
+        /// volume is set to 0; when unmuted, this value is restored.
+        /// </summary>
+        float OutputVolume { get; set; }
+
         #endregion
 
         #region Methods

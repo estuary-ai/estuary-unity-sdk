@@ -99,6 +99,25 @@ namespace Estuary
         /// </summary>
         public bool DebugLogging { get; set; }
 
+        /// <summary>
+        /// Output volume for bot audio (0.0 to 1.0). Default 1.0.
+        /// Applied to the bot AudioSource. When bot audio is muted (interrupt),
+        /// volume is set to 0; when unmuted, this value is restored.
+        /// </summary>
+        public float OutputVolume
+        {
+            get => _outputVolume;
+            set
+            {
+                _outputVolume = Mathf.Clamp01(value);
+                // Apply immediately if bot audio is not muted
+                if (_botAudioSource != null && !_botAudioMuted)
+                {
+                    _botAudioSource.volume = _outputVolume;
+                }
+            }
+        }
+
         #endregion
 
         #region Private Fields
@@ -118,6 +137,7 @@ namespace Estuary
         private string _interruptedMessageId;  // Message that was interrupted (to filter out)
         private float _lastInterruptTimestamp;  // Timestamp of last interrupt (to filter stale audio)
 
+        private float _outputVolume = 1f;
         private bool _disposed;
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
         private MonoBehaviour _coroutineRunner;
@@ -623,9 +643,9 @@ namespace Estuary
                     }
                     else
                     {
-                        // Unmute by restoring volume
-                        _botAudioSource.volume = 1f;
-                        Log("Bot audio UNMUTED (volume=1) via known AudioSource");
+                        // Unmute by restoring to configured output volume
+                        _botAudioSource.volume = _outputVolume;
+                        Log($"Bot audio UNMUTED (volume={_outputVolume}) via known AudioSource");
                         success = true;
                     }
                 }
@@ -786,7 +806,7 @@ namespace Estuary
                     _botAudioGameObject = new GameObject($"LiveKit_BotAudio_{participant.Identity}");
                     _botAudioSource = _botAudioGameObject.AddComponent<AudioSource>();
                     _botAudioSource.spatialBlend = 0f;  // 2D audio (no positional audio for voice)
-                    _botAudioSource.volume = 1f;
+                    _botAudioSource.volume = _outputVolume;
                     _botAudioSource.priority = 0;  // Highest priority for voice
                     _botAudioSource.dopplerLevel = 0f;  // No doppler effect for voice
                     _botAudioSource.bypassEffects = true;  // Skip audio effects pipeline for lower latency

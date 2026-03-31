@@ -80,7 +80,9 @@ namespace Estuary
         public string CurrentMessageId { get; private set; }
 
         /// <summary>
-        /// Volume for voice playback.
+        /// Volume for voice playback (0.0 to 1.0).
+        /// In WebSocket mode, controls the AudioSource volume directly.
+        /// In LiveKit mode, controls the LiveKit bot audio output volume.
         /// </summary>
         public float Volume
         {
@@ -90,6 +92,9 @@ namespace Estuary
                 volume = Mathf.Clamp01(value);
                 if (audioSource != null)
                     audioSource.volume = volume;
+                // Also apply to LiveKit voice manager if in LiveKit mode
+                if (_liveKitManager != null)
+                    _liveKitManager.OutputVolume = volume;
             }
         }
 
@@ -397,6 +402,12 @@ namespace Estuary
         {
             _liveKitManager = manager;
             _useLiveKit = manager != null;
+
+            // Sync volume to LiveKit manager
+            if (manager != null)
+            {
+                manager.OutputVolume = volume;
+            }
 
             Debug.Log($"[EstuaryAudioSource] {(manager != null ? "LiveKit" : "WebSocket")} mode enabled");
         }
