@@ -25,6 +25,7 @@ scene_graph: true                      # Subscribe to world model updates
 device_pose: true                      # Unity XR subsystem (XRInputSubsystem)
 min_audio_sample_rate: 16000
 max_audio_sample_rate: 48000
+default_playback_sample_rate: 24000    # TTS audio generated at 24kHz by default
 ```
 
 ## Parity Status
@@ -111,7 +112,7 @@ OnQuotaExceeded(QuotaExceededData)
 
 - Socket.IO v4 is implemented manually (Engine.IO framing + Socket.IO packet parsing) -- no third-party Socket.IO library
 - LiveKit uses the official Unity SDK package `io.livekit.livekit-sdk` when installed
-- Audio format: PCM 16-bit, sample rate configurable (default 16kHz for STT compatibility)
+- Audio format: PCM 16-bit, sample rate configurable (recording: 16kHz for STT, playback: 24kHz preferred TTS default)
 - Works across Unity platforms (Editor, Android, iOS, Windows, macOS) but LiveKit availability depends on platform support
 - **Auto-installer:** `Editor/EstuaryDependencyInstaller.cs` is an `[InitializeOnLoad]` script in the `Estuary.Editor` assembly (which has `"references": []` and compiles independently of the Runtime assembly). On domain reload it checks if `io.livekit.livekit-sdk` is installed and offers to add it via `PackageManager.Client.Add()`. Uses `SessionState` to avoid repeated prompts per Editor session. Because the Editor assembly has no reference to Runtime or LiveKit, it ALWAYS runs even when LiveKit is missing.
 - The `ESTUARY_LIVEKIT` scripting define is auto-set via `versionDefines` when `io.livekit.livekit-sdk` is detected. Do not manually define it.
