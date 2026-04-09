@@ -338,6 +338,34 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Script this character to say a specific prewritten line with TTS.
+        /// </summary>
+        /// <param name="text">The scripted line text</param>
+        /// <param name="textOnly">If true, text-only response (no TTS audio). Default false.</param>
+        public void SayLine(string text, bool textOnly = false)
+        {
+            _ = SayLineAsync(text, textOnly);
+        }
+
+        /// <summary>
+        /// Script this character to say a specific prewritten line with TTS asynchronously.
+        /// </summary>
+        /// <param name="text">The scripted line text</param>
+        /// <param name="textOnly">If true, text-only response (no TTS audio). Default false.</param>
+        public async Task SayLineAsync(string text, bool textOnly = false)
+        {
+            if (!IsConnected)
+            {
+                Debug.LogWarning("[EstuaryCharacter] Cannot say line: not connected");
+                return;
+            }
+            // Reset partial response state
+            CurrentPartialResponse = "";
+            CurrentMessageId = null;
+            await EstuaryManager.Instance.SayLineAsync(text, textOnly);
+        }
+
+        /// <summary>
         /// Start a voice session for this character.
         /// In LiveKit mode, this configures the microphone for native WebRTC capture with AEC.
         /// In WebSocket mode, this uses Unity's Microphone API.

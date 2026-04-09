@@ -262,6 +262,30 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Script the character to say a specific prewritten line with TTS.
+        /// </summary>
+        /// <param name="text">The scripted line text</param>
+        /// <param name="textOnly">If true, text-only response (no TTS audio). Default false.</param>
+        public async Task SayLineAsync(string text, bool textOnly = false)
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot say line: not connected");
+                return;
+            }
+            var payload = new SayLinePayload { text = text, text_only = textOnly };
+            await _socket.EmitAsync("say_line", payload);
+            Log($"Say line (textOnly={textOnly}): {text}");
+        }
+
+        [Serializable]
+        private class SayLinePayload
+        {
+            public string text;
+            public bool text_only;
+        }
+
+        /// <summary>
         /// Stream audio data to the server for speech-to-text.
         /// </summary>
         /// <param name="audioBase64">Base64-encoded 16-bit PCM audio at 16kHz</param>

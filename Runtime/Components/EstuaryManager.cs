@@ -433,6 +433,21 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Script the character to say a specific prewritten line with TTS.
+        /// </summary>
+        /// <param name="text">The scripted line text</param>
+        /// <param name="textOnly">If true, text-only response (no TTS audio). Default false.</param>
+        public async Task SayLineAsync(string text, bool textOnly = false)
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Debug.LogError("[EstuaryManager] Cannot say line: not connected");
+                return;
+            }
+            await _client.SayLineAsync(text, textOnly);
+        }
+
+        /// <summary>
         /// Stream audio data to the server.
         /// </summary>
         /// <param name="audioBase64">Base64-encoded audio</param>
