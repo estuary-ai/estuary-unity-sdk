@@ -268,6 +268,11 @@ namespace Estuary
         /// <param name="textOnly">If true, text-only response (no TTS audio). Default false.</param>
         public async Task SayLineAsync(string text, bool textOnly = false)
         {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                LogError("Cannot say line: text is empty");
+                return;
+            }
             if (!IsConnected)
             {
                 LogError("Cannot say line: not connected");
