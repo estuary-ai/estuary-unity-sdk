@@ -43,6 +43,7 @@ All `REQUIRED` and `OPTIONAL` features from SDK_CONTRACT.md are implemented:
 - scene_graph: Implemented
 - device_pose: Implemented
 - preferences: Implemented
+- session_rejected: Documented / impl deferred — event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Unity client handler and user-visible message surfacing are deferred; the gateway will emit `session_rejected` with `reason: "concurrent_limit"` and immediately disconnect, which the SDK currently treats as a generic disconnect. Surface as a follow-up when share-token flows go consumer-facing.
 
 ## Architecture
 
