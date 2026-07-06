@@ -71,6 +71,13 @@ namespace Estuary
         /// </summary>
         public delegate void QuotaExceededHandler(QuotaExceededData data);
 
+        /// <summary>
+        /// Delegate for idle-session timeout events.
+        /// Fired when the server ends the session after no conversation activity
+        /// for its idle timeout; the server disconnects immediately after.
+        /// </summary>
+        public delegate void SessionTimeoutHandler(SessionTimeoutData data);
+
         #region World Model Events
 
         /// <summary>

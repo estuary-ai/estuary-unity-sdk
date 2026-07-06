@@ -103,6 +103,14 @@ namespace Estuary
         public event EstuaryEvents.QuotaExceededHandler OnQuotaExceeded;
 
         /// <summary>
+        /// Fired when the server ends the session due to inactivity (idle timeout).
+        /// The server disconnects the socket and deletes the LiveKit room right
+        /// after this event. The SDK will NOT auto-reconnect from this disconnect —
+        /// call ConnectAsync again on explicit user intent to resume.
+        /// </summary>
+        public event EstuaryEvents.SessionTimeoutHandler OnSessionTimeout;
+
+        /// <summary>
         /// Fired when a scene graph update is received from the world model.
         /// </summary>
         public event EstuaryEvents.SceneGraphUpdateHandler OnSceneGraphUpdate;
@@ -156,6 +164,9 @@ namespace Estuary
         private int _reconnectAttempts;
         private bool _disposed;
         private bool _isVoiceModeActive;
+        // Set by session_timeout: suppresses the auto-reconnect for the
+        // server-initiated disconnect that immediately follows it.
+        private bool _serverEndedSession;
 
         // Queue for main thread dispatching
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
@@ -196,6 +207,7 @@ namespace Estuary
             _playerId = playerId;
             _audioSampleRate = audioSampleRate;
             _token = token;
+            _serverEndedSession = false;  // explicit user intent overrides a prior idle timeout
 
             await ConnectInternalAsync();
         }
@@ -571,6 +583,7 @@ namespace Estuary
 
                 // Quota event handler
                 _socket.On("quota_exceeded", HandleQuotaExceeded);
+                _socket.On("session_timeout", HandleSessionTimeout);
 
                 // World model event handlers
                 _socket.On("scene_graph_update", HandleSceneGraphUpdate);
@@ -655,11 +668,16 @@ namespace Estuary
             CurrentSession = null;
             DispatchToMainThread(() => OnDisconnected?.Invoke(reason));
 
-            // Attempt reconnect if not intentional
-            if (reason != "client disconnect")
+            // Attempt reconnect if not intentional. A disconnect that follows
+            // session_timeout IS intentional (server-side idle reap) — auto-
+            // reconnecting would re-authenticate and put the bot back into a
+            // billed LiveKit room with nobody talking, in a 10-minute loop.
+            // Resuming from an idle timeout requires an explicit ConnectAsync.
+            if (reason != "client disconnect" && !_serverEndedSession)
             {
                 _ = HandleReconnect();
             }
+            _serverEndedSession = false;
         }
 
         private void HandleError(string error)
@@ -974,6 +992,31 @@ namespace Estuary
                 LogError($"Failed to parse quota_exceeded: {e.Message}");
                 DispatchToMainThread(() => OnError?.Invoke("Quota exceeded"));
             }
+        }
+
+        private void HandleSessionTimeout(string json)
+        {
+            SessionTimeoutData data = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(json))
+                {
+                    data = SessionTimeoutData.FromJson(json);
+                }
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse session_timeout: {e.Message}");
+            }
+
+            data = data ?? new SessionTimeoutData();
+            Log($"Server ended session for inactivity: {data}");
+
+            // The server disconnects this socket right after session_timeout —
+            // flag it so HandleDisconnected does not auto-reconnect.
+            _serverEndedSession = true;
+
+            DispatchToMainThread(() => OnSessionTimeout?.Invoke(data));
         }
 
         private void HandleSceneGraphUpdate(string json)

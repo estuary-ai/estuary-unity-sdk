@@ -43,6 +43,7 @@ All `REQUIRED` and `OPTIONAL` features from SDK_CONTRACT.md are implemented:
 - scene_graph: Implemented
 - device_pose: Implemented
 - preferences: Implemented
+- session_timeout: Implemented — `HandleSessionTimeout` fires `OnSessionTimeout(SessionTimeoutData)` and flags the disconnect that follows so the client's auto-reconnect is suppressed (auto-reconnecting would re-authenticate, trigger the gateway's eager LiveKit pre-join, and resurrect idle-session billing in a 10-minute loop). Resuming requires an explicit `ConnectAsync` driven by user intent, per SDK_CONTRACT.md.
 - session_rejected: Documented / impl deferred — event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Unity client handler and user-visible message surfacing are deferred; the gateway will emit `session_rejected` with `reason: "concurrent_limit"` and immediately disconnect, which the SDK currently treats as a generic disconnect. Surface as a follow-up when share-token flows go consumer-facing.
 
 ## Architecture
@@ -100,6 +101,7 @@ OnInterrupt(InterruptData)
 OnLiveKitTokenReceived(LiveKitTokenResponse)
 OnSceneGraphUpdate(SceneGraphUpdate)
 OnQuotaExceeded(QuotaExceededData)
+OnSessionTimeout(SessionTimeoutData)  // Server idle-timeout; no auto-reconnect — resume via ConnectAsync
 ```
 
 ## Code Style
