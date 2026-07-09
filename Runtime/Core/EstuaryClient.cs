@@ -111,6 +111,15 @@ namespace Estuary
         public event EstuaryEvents.SessionTimeoutHandler OnSessionTimeout;
 
         /// <summary>
+        /// Fired when the server releases the session's voice resources after no
+        /// user speech for the voice-idle timeout (STT closed, LiveKit room deleted
+        /// server-side). The socket STAYS CONNECTED and text chat continues — no
+        /// disconnect follows, unlike session_timeout. Release local voice state
+        /// and restart voice on explicit user intent (auto-mute illusion UX).
+        /// </summary>
+        public event EstuaryEvents.VoiceTimeoutHandler OnVoiceTimeout;
+
+        /// <summary>
         /// Fired when a scene graph update is received from the world model.
         /// </summary>
         public event EstuaryEvents.SceneGraphUpdateHandler OnSceneGraphUpdate;
@@ -584,6 +593,7 @@ namespace Estuary
                 // Quota event handler
                 _socket.On("quota_exceeded", HandleQuotaExceeded);
                 _socket.On("session_timeout", HandleSessionTimeout);
+                _socket.On("voice_timeout", HandleVoiceTimeout);
 
                 // World model event handlers
                 _socket.On("scene_graph_update", HandleSceneGraphUpdate);
@@ -666,6 +676,10 @@ namespace Estuary
             Log($"Socket disconnected: {reason}");
             SetState(ConnectionState.Disconnected);
             CurrentSession = null;
+            // Backend voice mode dies with the socket; if this stayed true, the
+            // next StartVoiceModeAsync after a reconnect would no-op and never
+            // re-open the STT stream.
+            _isVoiceModeActive = false;
             DispatchToMainThread(() => OnDisconnected?.Invoke(reason));
 
             // Attempt reconnect if not intentional. A disconnect that follows
@@ -1017,6 +1031,34 @@ namespace Estuary
             _serverEndedSession = true;
 
             DispatchToMainThread(() => OnSessionTimeout?.Invoke(data));
+        }
+
+        private void HandleVoiceTimeout(string json)
+        {
+            VoiceTimeoutData data = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(json))
+                {
+                    data = VoiceTimeoutData.FromJson(json);
+                }
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse voice_timeout: {e.Message}");
+            }
+
+            data = data ?? new VoiceTimeoutData();
+            Log($"Server released voice resources for voice inactivity: {data}");
+
+            // The socket stays open and no disconnect follows — do NOT set
+            // _serverEndedSession (that is session_timeout's path). The server
+            // closed the STT stream without a voice_stopped event, so clear the
+            // voice-mode gate here or the next StartVoiceModeAsync would no-op
+            // with "already active" against a dead Deepgram stream.
+            _isVoiceModeActive = false;
+
+            DispatchToMainThread(() => OnVoiceTimeout?.Invoke(data));
         }
 
         private void HandleSceneGraphUpdate(string json)

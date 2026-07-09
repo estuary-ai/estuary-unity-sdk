@@ -857,6 +857,18 @@ namespace Estuary
                 Log("Room disconnected");
                 IsConnected = false;
                 CurrentRoomName = null;
+                // This Room instance is dead (e.g. the server deleted the room
+                // during a voice_timeout / idle reap) — drop it so the next
+                // ConnectAsync creates a fresh Room instead of reusing a
+                // disconnected one, and stop the mic source so a server-side
+                // teardown can't leave the capture hot. (StopPublishingAsync
+                // skips the unpublish when _room is null and still disposes
+                // the microphone source.)
+                _room = null;
+                if (IsPublishing)
+                {
+                    _ = StopPublishingAsync();
+                }
                 DispatchToMainThread(() => OnDisconnected?.Invoke("room disconnected"));
             };
 

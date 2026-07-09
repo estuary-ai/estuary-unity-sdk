@@ -78,6 +78,14 @@ namespace Estuary
         /// </summary>
         public delegate void SessionTimeoutHandler(SessionTimeoutData data);
 
+        /// <summary>
+        /// Delegate for voice-idle timeout events.
+        /// Fired when the server releases the session's voice resources after no
+        /// user speech for its voice-idle timeout. The socket stays connected and
+        /// text chat continues — no disconnect follows (unlike session_timeout).
+        /// </summary>
+        public delegate void VoiceTimeoutHandler(VoiceTimeoutData data);
+
         #region World Model Events
 
         /// <summary>

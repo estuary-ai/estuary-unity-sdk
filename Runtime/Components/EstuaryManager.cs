@@ -174,6 +174,21 @@ namespace Estuary
         /// </summary>
         public event Action<AudioSource> OnBotAudioSourceCreated;
 
+        /// <summary>
+        /// Fired when the server ends the session due to inactivity. The server
+        /// disconnects right after; no layer of the SDK will auto-reconnect.
+        /// Resume with an explicit Connect() on user intent.
+        /// </summary>
+        public event EstuaryEvents.SessionTimeoutHandler OnSessionTimeout;
+
+        /// <summary>
+        /// Fired when the server releases the session's voice resources after no
+        /// user speech for the voice-idle timeout. The socket stays connected and
+        /// text chat continues; local voice state has been released. Recommended
+        /// UX: show the mic as auto-muted, start a fresh voice session on unmute.
+        /// </summary>
+        public event EstuaryEvents.VoiceTimeoutHandler OnVoiceTimeout;
+
         #endregion
 
         #region Private Fields
@@ -667,6 +682,8 @@ namespace Estuary
             _client.OnInterrupt += HandleInterrupt;
             _client.OnError += HandleError;
             _client.OnConnectionStateChanged += HandleConnectionStateChanged;
+            _client.OnSessionTimeout += HandleSessionTimeout;
+            _client.OnVoiceTimeout += HandleVoiceTimeout;
 
             // Subscribe to LiveKit client events
             _client.OnLiveKitTokenReceived += HandleLiveKitTokenReceived;
@@ -719,6 +736,8 @@ namespace Estuary
                 _client.OnInterrupt -= HandleInterrupt;
                 _client.OnError -= HandleError;
                 _client.OnConnectionStateChanged -= HandleConnectionStateChanged;
+                _client.OnSessionTimeout -= HandleSessionTimeout;
+                _client.OnVoiceTimeout -= HandleVoiceTimeout;
                 _client.OnLiveKitTokenReceived -= HandleLiveKitTokenReceived;
                 _client.OnLiveKitReady -= HandleLiveKitRoomReady;
                 _client.OnLiveKitError -= HandleLiveKitError;
@@ -772,17 +791,16 @@ namespace Estuary
             bool characterWantsVoice = _activeCharacter?.AutoStartVoiceSession ?? false;
             if (config != null && config.IsLiveKitEnabled && characterWantsVoice)
             {
-                // If session_info included an embedded LiveKit token, don't also request one separately.
-                // The embedded token was already dispatched via OnLiveKitTokenReceived in HandleSessionInfo.
-                if (sessionInfo.HasLiveKitToken)
-                {
-                    Log("Skipping LiveKit token request -- using embedded token from session_info");
-                }
-                else
-                {
-                    Log("Auto-requesting LiveKit token...");
-                    _ = RequestLiveKitTokenAsync();
-                }
+                // Always emit the livekit_token request — it is the voice-intent
+                // signal. The gateway allocates its bot pre-join + STT on this
+                // request, never at auth (lazy pre-join), so relying solely on
+                // the embedded session_info token means a cold bot join at
+                // livekit_join (~0.5-2s slower). The embedded token (already
+                // dispatched by HandleSessionInfo) still wins the race for the
+                // client-side join; the request's duplicate token response is
+                // absorbed by HandleLiveKitTokenReceived's idle-state guard.
+                Log("Requesting LiveKit token (voice intent — pre-warms bot join)...");
+                _ = RequestLiveKitTokenAsync();
             }
         }
 
@@ -873,6 +891,50 @@ namespace Estuary
             _activeCharacter?.HandleError(error);
         }
 
+        private void HandleSessionTimeout(SessionTimeoutData data)
+        {
+            Log($"Session timeout: {data}");
+
+            // Forward to the character FIRST — the server's disconnect is queued
+            // right behind this event, and the character must flag its own
+            // auto-reconnect off before HandleDisconnected runs.
+            _activeCharacter?.HandleSessionTimeout(data);
+
+            OnSessionTimeout?.Invoke(data);
+        }
+
+        private void HandleVoiceTimeout(VoiceTimeoutData data)
+        {
+            Log($"Voice timeout: {data}");
+
+            // The server already closed STT and deleted the LiveKit room; the
+            // socket stays connected and text continues. Dispose the local room
+            // object without notifying the server (the room is gone — its
+            // Disconnected event during this teardown is expected, not a call
+            // failure) and clear the character's voice state so the next voice
+            // start is a fresh session instead of VOICE_ALREADY_ACTIVE.
+            if (_liveKitManager != null &&
+                (_liveKitManager.IsConnected || _liveKitState != LiveKitConnectionState.Disconnected))
+            {
+                _ = ReleaseLiveKitAfterServerTeardownAsync();
+            }
+
+            _activeCharacter?.HandleVoiceTimeout(data);
+
+            OnVoiceTimeout?.Invoke(data);
+        }
+
+        private async Task ReleaseLiveKitAfterServerTeardownAsync()
+        {
+            // Skip NotifyLiveKitLeftAsync — the server initiated this teardown
+            // and the room no longer exists.
+            await _liveKitManager.DisconnectAsync();
+            SetLiveKitState(LiveKitConnectionState.Disconnected);
+            // The pending token is scoped to the deleted room; the next voice
+            // start must request a fresh one (which also pre-warms the bot join).
+            _pendingLiveKitToken = null;
+        }
+
         private void HandleConnectionStateChanged(ConnectionState state)
         {
             Log($"Connection state: {state}");
@@ -886,6 +948,13 @@ namespace Estuary
             {
                 _ = DisconnectLiveKitAsync();
             }
+
+            // Any held LiveKit token is scoped to the session's room, which the
+            // server deletes on socket disconnect — never reuse it.
+            if (state == ConnectionState.Disconnected)
+            {
+                _pendingLiveKitToken = null;
+            }
         }
 
         #endregion
@@ -897,8 +966,15 @@ namespace Estuary
             Log($"Received LiveKit token for room: {tokenResponse.room}");
             _pendingLiveKitToken = tokenResponse;
 
-            // Auto-connect if the active character wants voice
-            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession)
+            // Auto-connect if the active character wants voice — but only from
+            // an idle state. Two tokens can arrive for the same room (the
+            // embedded session_info token plus the response to the voice-intent
+            // livekit_token request); whichever lands first connects and the
+            // other is just stored, instead of bouncing the room ("already
+            // connected, disconnecting first").
+            bool idle = _liveKitState == LiveKitConnectionState.Disconnected
+                     || _liveKitState == LiveKitConnectionState.RequestingToken;
+            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession && idle)
             {
                 await ConnectLiveKitWithTokenAsync(tokenResponse);
             }
@@ -942,6 +1018,16 @@ namespace Estuary
         {
             Log($"LiveKit disconnected: {reason}");
             SetLiveKitState(LiveKitConnectionState.Disconnected);
+
+            // Belt-and-braces for the stale-voice-state bug class: if the room
+            // died server-side (voice reap, session teardown, network) rather
+            // than via a local DisconnectAsync, the character must not be left
+            // "in a call" with a hot mic and a dead transport. Idempotent — a
+            // no-op when voice_timeout/session_timeout already cleaned up.
+            if (reason != "client disconnect")
+            {
+                _activeCharacter?.HandleVoiceTransportClosed();
+            }
         }
 
         private void HandleLiveKitError(string error)

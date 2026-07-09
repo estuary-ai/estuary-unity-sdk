@@ -78,6 +78,14 @@ namespace Estuary
         [Tooltip("Fired when an action is parsed from a bot response")]
         private ActionReceivedEvent onActionReceived = new ActionReceivedEvent();
 
+        [SerializeField]
+        [Tooltip("Fired when the server ends the session for inactivity (disconnect follows; no auto-reconnect)")]
+        private SessionTimeoutEvent onSessionTimeout = new SessionTimeoutEvent();
+
+        [SerializeField]
+        [Tooltip("Fired when the server releases voice after voice inactivity (socket stays; text keeps working)")]
+        private VoiceTimeoutEvent onVoiceTimeout = new VoiceTimeoutEvent();
+
         #endregion
 
         #region Properties
@@ -143,6 +151,13 @@ namespace Estuary
         /// </summary>
         public string CurrentMessageId { get; private set; }
 
+        // Set when the server ends the session (session_timeout). The client
+        // layer suppresses its own reconnect, but this component ALSO
+        // reconnects on disconnect (autoReconnect) — without this flag the
+        // character layer would re-auth and resurrect billing in a loop even
+        // though the socket layer behaved. Cleared on explicit Connect().
+        private bool _serverEndedSession;
+
         #endregion
 
         #region C# Events
@@ -192,6 +207,22 @@ namespace Estuary
         /// Actions are embedded using XML-style tags: &lt;action name="sit" /&gt;
         /// </summary>
         public event Action<AgentAction> OnActionReceived;
+
+        /// <summary>
+        /// Fired when the server ends the session due to inactivity. The server
+        /// disconnects right after; the SDK will NOT auto-reconnect (at any
+        /// layer). Resume with an explicit Connect() on user intent.
+        /// </summary>
+        public event Action<SessionTimeoutData> OnSessionTimeout;
+
+        /// <summary>
+        /// Fired when the server releases the voice session after no user speech
+        /// for the voice-idle timeout. The socket stays connected and text chat
+        /// continues. The mic has been stopped and voice state cleared — the
+        /// recommended UX is to show the mic as auto-muted and call
+        /// StartVoiceSession() when the user unmutes.
+        /// </summary>
+        public event Action<VoiceTimeoutData> OnVoiceTimeout;
 
         #endregion
 
@@ -249,6 +280,9 @@ namespace Estuary
                 Debug.LogError($"[EstuaryCharacter] Cannot connect: PlayerId is not set on {gameObject.name}");
                 return;
             }
+
+            // Explicit user intent overrides a prior server-ended session
+            _serverEndedSession = false;
 
             // Make this the active character and connect
             EstuaryManager.Instance.SetActiveCharacter(this);
@@ -549,8 +583,16 @@ namespace Estuary
             OnDisconnected?.Invoke();
             onDisconnected?.Invoke();
 
-            // Auto-reconnect if enabled
-            if (autoReconnect && reason != "client disconnect")
+            // Auto-reconnect if enabled — but NEVER after a server-side idle
+            // reap (session_timeout). Reconnecting would re-authenticate and,
+            // combined with voice auto-start, resurrect billed voice resources
+            // with nobody talking, in a loop. Resume requires explicit Connect().
+            if (_serverEndedSession)
+            {
+                _serverEndedSession = false;
+                Debug.Log($"[EstuaryCharacter] Server ended the session (idle timeout) — skipping auto-reconnect. Call Connect() to resume.");
+            }
+            else if (autoReconnect && reason != "client disconnect")
             {
                 Debug.Log($"[EstuaryCharacter] Auto-reconnecting...");
                 Connect();
@@ -660,6 +702,69 @@ namespace Estuary
             onInterrupt?.Invoke();
         }
 
+        internal void HandleSessionTimeout(SessionTimeoutData data)
+        {
+            Debug.Log($"[EstuaryCharacter] Session ended by server for inactivity: {data}");
+
+            // The disconnect that follows must not trigger this component's
+            // auto-reconnect (see HandleDisconnected).
+            _serverEndedSession = true;
+
+            // Stop the mic now — the server has already torn down voice.
+            ReleaseLocalVoiceState();
+
+            // Invoke events
+            OnSessionTimeout?.Invoke(data);
+            onSessionTimeout?.Invoke(data);
+        }
+
+        internal void HandleVoiceTimeout(VoiceTimeoutData data)
+        {
+            Debug.Log($"[EstuaryCharacter] Voice released by server for voice inactivity: {data}");
+
+            // The socket stays open and text keeps working — do NOT touch
+            // _serverEndedSession (no disconnect follows). The server already
+            // closed STT and deleted the room, so only local cleanup here; no
+            // stop_voice is sent. Resume = StartVoiceSession() on user intent
+            // (auto-mute illusion UX).
+            ReleaseLocalVoiceState();
+
+            // Invoke events
+            OnVoiceTimeout?.Invoke(data);
+            onVoiceTimeout?.Invoke(data);
+        }
+
+        /// <summary>
+        /// Belt-and-braces cleanup for any server-side voice teardown the client
+        /// didn't process as an event (e.g. the LiveKit room dying while the
+        /// socket stays up). Idempotent: stops the mic and clears voice-active
+        /// state so the next StartVoiceSession() starts fresh instead of
+        /// streaming into a dead transport.
+        /// </summary>
+        internal void HandleVoiceTransportClosed()
+        {
+            if (!IsVoiceSessionActive) return;
+
+            Debug.Log($"[EstuaryCharacter] Voice transport closed — clearing stale voice session state");
+            ReleaseLocalVoiceState();
+        }
+
+        private void ReleaseLocalVoiceState()
+        {
+            IsVoiceSessionActive = false;
+
+            // Unsubscribe the LiveKit-ready waiter in case a voice start was pending
+            if (EstuaryManager.HasInstance)
+            {
+                EstuaryManager.Instance.OnLiveKitReady -= OnLiveKitReadyForVoice;
+            }
+
+            if (microphone != null)
+            {
+                microphone.StopRecording();
+            }
+        }
+
         internal void HandleError(string error)
         {
             Debug.LogError($"[EstuaryCharacter] Error: {error}");
@@ -713,6 +818,12 @@ namespace Estuary
 
         [Serializable]
         public class ActionReceivedEvent : UnityEvent<AgentAction> { }
+
+        [Serializable]
+        public class SessionTimeoutEvent : UnityEvent<SessionTimeoutData> { }
+
+        [Serializable]
+        public class VoiceTimeoutEvent : UnityEvent<VoiceTimeoutData> { }
 
         #endregion
     }
