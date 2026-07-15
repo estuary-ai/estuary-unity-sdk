@@ -30,7 +30,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz by default
 
 ## Parity Status
 
-All `REQUIRED` and `OPTIONAL` features from SDK_CONTRACT.md are implemented:
+All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT.md are implemented (web-debug-only events like `turn_metrics` are intentionally not consumed — see below):
 
 - text_chat: Implemented
 - voice_websocket: Implemented
@@ -46,6 +46,7 @@ All `REQUIRED` and `OPTIONAL` features from SDK_CONTRACT.md are implemented:
 - voice_timeout: Implemented — server voice-lane idle release (SDK_CONTRACT.md): after no user speech for `VOICE_IDLE_TIMEOUT_S` the server emits `voice_timeout`, deletes the LiveKit room / closes STT, and KEEPS the socket (text keeps working; no disconnect follows — never wired into reconnect suppression). `EstuaryClient` clears the voice-mode gate and fires `OnVoiceTimeout(VoiceTimeoutData)`; `EstuaryManager` disposes the local LiveKit room WITHOUT `livekit_leave` (the room is already gone server-side; its Disconnected event during this teardown is expected, not a call failure) and forwards to `EstuaryCharacter`, which stops the mic and clears `IsVoiceSessionActive` so the next `StartVoiceSession()` is a fresh session. Recommended UX is the auto-mute illusion (mic shows muted; unmute = `StartVoiceSession()`). Belt-and-braces: any non-client LiveKit room disconnect also clears stale voice state via `HandleVoiceTransportClosed`.
 - session_timeout: Implemented at EVERY reconnect-owning layer (Lens lesson 7/8: socket-layer suppression alone is insufficient) — `EstuaryClient.HandleSessionTimeout` fires `OnSessionTimeout(SessionTimeoutData)` and flags the disconnect that follows so the client's auto-reconnect is suppressed; the event is forwarded client → manager → character, and `EstuaryCharacter` sets its own `_serverEndedSession` flag so its component-level `autoReconnect` also skips the reap disconnect (it previously looped: reconnect → re-auth → billed voice resources → reaped again). Both flags clear on explicit connect. Resuming requires an explicit `ConnectAsync`/`Connect()` driven by user intent, per SDK_CONTRACT.md.
 - session_rejected: Documented / impl deferred — event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Unity client handler and user-visible message surfacing are deferred; the gateway will emit `session_rejected` with `reason: "concurrent_limit"` and immediately disconnect, which the SDK currently treats as a generic disconnect. Surface as a follow-up when share-token flows go consumer-facing.
+- turn_metrics: Not consumed (web-debug only) — backend emits this OPTIONAL/debug event (SDK_CONTRACT.md contract v1.1) carrying per-response voice-latency timings for the web chat latency gizmo; no Unity handler needed.
 
 ## Architecture
 
