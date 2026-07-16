@@ -114,10 +114,11 @@ OnMemoryUpdated(MemoryUpdatedEvent)   // Newly extracted memories pushed after a
 OnSessionRejected(SessionRejectedData) // Policy cap hit (e.g. concurrent-session limit); disconnect follows, no auto-reconnect
 ```
 
-Outbound methods added for parity: `SendCameraImage(imageBase64, mimeType, requestId?, text?)` and
-`UpdatePreferences(enableVisionAcknowledgment)` on both `EstuaryManager` and `EstuaryCharacter`
-(with `...Async` variants on the client). The auth payload additionally carries `capabilities`
-(from EstuaryConfig `deviceHas*` toggles) and `enable_animation`.
+Outbound methods added for parity: `SendCameraImage(imageBase64, mimeType, requestId?, text?)` on
+`EstuaryManager` and `EstuaryCharacter` (`SendCameraImageAsync` on the client), and
+`UpdatePreferencesAsync(enableVisionAcknowledgment)` on `EstuaryManager` and `EstuaryClient` only
+(session-level — intentionally NOT on the per-character component). The auth payload additionally
+carries `capabilities` (from EstuaryConfig `deviceHas*` toggles) and `enable_animation`.
 
 ## Code Style
 
