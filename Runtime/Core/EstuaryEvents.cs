@@ -86,6 +86,28 @@ namespace Estuary
         /// </summary>
         public delegate void VoiceTimeoutHandler(VoiceTimeoutData data);
 
+        /// <summary>
+        /// Delegate for session-rejected events.
+        /// Fired when the server refuses the connection because a policy cap was
+        /// hit (e.g. the per-share-token concurrent-session limit). The server
+        /// disconnects immediately after; the SDK does not auto-reconnect.
+        /// </summary>
+        public delegate void SessionRejectedHandler(SessionRejectedData data);
+
+        /// <summary>
+        /// Delegate for camera-capture request events.
+        /// Fired when the server asks the client to capture and send an image
+        /// (vision intent). Respond with SendCameraImage using the request_id.
+        /// </summary>
+        public delegate void CameraCaptureRequestHandler(CameraCaptureRequest request);
+
+        /// <summary>
+        /// Delegate for real-time memory push events.
+        /// Fired after background memory extraction completes at the end of a
+        /// conversation (memory_updated).
+        /// </summary>
+        public delegate void MemoryUpdatedHandler(MemoryUpdatedEvent data);
+
         #region World Model Events
 
         /// <summary>

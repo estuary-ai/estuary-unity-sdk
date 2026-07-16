@@ -86,6 +86,18 @@ namespace Estuary
         [Tooltip("Fired when the server releases voice after voice inactivity (socket stays; text keeps working)")]
         private VoiceTimeoutEvent onVoiceTimeout = new VoiceTimeoutEvent();
 
+        [SerializeField]
+        [Tooltip("Fired when the server requests a camera image (vision intent). Capture a frame and call SendCameraImage with the RequestId.")]
+        private CameraCaptureRequestEvent onCameraCaptureRequested = new CameraCaptureRequestEvent();
+
+        [SerializeField]
+        [Tooltip("Fired when the server pushes newly extracted memories after a conversation ends")]
+        private MemoryUpdatedEventUnity onMemoryUpdated = new MemoryUpdatedEventUnity();
+
+        [SerializeField]
+        [Tooltip("Fired when the server rejects the connection due to a policy cap (disconnect follows; no auto-reconnect)")]
+        private SessionRejectedEvent onSessionRejected = new SessionRejectedEvent();
+
         #endregion
 
         #region Properties
@@ -223,6 +235,27 @@ namespace Estuary
         /// StartVoiceSession() when the user unmutes.
         /// </summary>
         public event Action<VoiceTimeoutData> OnVoiceTimeout;
+
+        /// <summary>
+        /// Fired when the server proactively requests a camera image (vision
+        /// intent). Capture a frame, encode it as base64, and call
+        /// SendCameraImage with the request's RequestId.
+        /// </summary>
+        public event Action<CameraCaptureRequest> OnCameraCaptureRequested;
+
+        /// <summary>
+        /// Fired when the server pushes newly extracted memories after a
+        /// conversation ends (memory_updated).
+        /// </summary>
+        public event Action<MemoryUpdatedEvent> OnMemoryUpdated;
+
+        /// <summary>
+        /// Fired when the server rejects the connection because a policy cap was
+        /// hit (e.g. the per-share-token concurrent-session limit). A disconnect
+        /// follows; the SDK will NOT auto-reconnect (it would loop against the
+        /// cap). Surface the reason and retry on explicit user intent.
+        /// </summary>
+        public event Action<SessionRejectedData> OnSessionRejected;
 
         #endregion
 
@@ -550,6 +583,35 @@ namespace Estuary
             CurrentMessageId = null;
         }
 
+        /// <summary>
+        /// Send a camera image to the character for vision-language processing.
+        /// Call this in response to OnCameraCaptureRequested (echo the request's
+        /// RequestId) or proactively. The reply arrives via the normal bot
+        /// response/voice events.
+        /// </summary>
+        /// <param name="imageBase64">Base64-encoded image bytes (no data: URI prefix)</param>
+        /// <param name="mimeType">Image MIME type, e.g. "image/jpeg"</param>
+        /// <param name="requestId">Optional correlation ID from a camera_capture request</param>
+        /// <param name="text">Optional accompanying prompt text</param>
+        public void SendCameraImage(string imageBase64, string mimeType = "image/jpeg", string requestId = null, string text = null)
+        {
+            _ = SendCameraImageAsync(imageBase64, mimeType, requestId, text);
+        }
+
+        /// <summary>
+        /// Send a camera image to the character asynchronously. See
+        /// <see cref="SendCameraImage"/>.
+        /// </summary>
+        public async Task SendCameraImageAsync(string imageBase64, string mimeType = "image/jpeg", string requestId = null, string text = null)
+        {
+            if (!IsConnected)
+            {
+                Debug.LogWarning("[EstuaryCharacter] Cannot send camera image: not connected");
+                return;
+            }
+            await EstuaryManager.Instance.SendCameraImageAsync(imageBase64, mimeType, requestId, text);
+        }
+
         #endregion
 
         #region Internal Event Handlers (Called by EstuaryManager)
@@ -779,6 +841,38 @@ namespace Estuary
             OnConnectionStateChanged?.Invoke(state);
         }
 
+        internal void HandleCameraCaptureRequest(CameraCaptureRequest request)
+        {
+            Debug.Log($"[EstuaryCharacter] Camera capture requested: {request}");
+
+            OnCameraCaptureRequested?.Invoke(request);
+            onCameraCaptureRequested?.Invoke(request);
+        }
+
+        internal void HandleMemoryUpdated(MemoryUpdatedEvent data)
+        {
+            Debug.Log($"[EstuaryCharacter] Memory updated: {data}");
+
+            OnMemoryUpdated?.Invoke(data);
+            onMemoryUpdated?.Invoke(data);
+        }
+
+        internal void HandleSessionRejected(SessionRejectedData data)
+        {
+            Debug.LogWarning($"[EstuaryCharacter] Session rejected by server: {data}");
+
+            // The disconnect that follows must not trigger this component's
+            // auto-reconnect — reconnecting would just hit the same policy cap
+            // again in a loop (same reasoning as session_timeout).
+            _serverEndedSession = true;
+
+            // Idempotent local cleanup in case a voice session was somehow active.
+            ReleaseLocalVoiceState();
+
+            OnSessionRejected?.Invoke(data);
+            onSessionRejected?.Invoke(data);
+        }
+
         #endregion
 
         #region Private Methods
@@ -824,6 +918,17 @@ namespace Estuary
 
         [Serializable]
         public class VoiceTimeoutEvent : UnityEvent<VoiceTimeoutData> { }
+
+        [Serializable]
+        public class CameraCaptureRequestEvent : UnityEvent<CameraCaptureRequest> { }
+
+        // Named ...Unity to avoid a clash with the Estuary.Models.MemoryUpdatedEvent
+        // data model it carries.
+        [Serializable]
+        public class MemoryUpdatedEventUnity : UnityEvent<MemoryUpdatedEvent> { }
+
+        [Serializable]
+        public class SessionRejectedEvent : UnityEvent<SessionRejectedData> { }
 
         #endregion
     }

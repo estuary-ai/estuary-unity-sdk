@@ -189,6 +189,26 @@ namespace Estuary
         /// </summary>
         public event EstuaryEvents.VoiceTimeoutHandler OnVoiceTimeout;
 
+        /// <summary>
+        /// Fired when the server proactively requests a camera image (vision
+        /// intent). Capture a frame and reply via SendCameraImageAsync with the
+        /// request's RequestId.
+        /// </summary>
+        public event EstuaryEvents.CameraCaptureRequestHandler OnCameraCaptureRequested;
+
+        /// <summary>
+        /// Fired when the server pushes newly extracted memories after a
+        /// conversation ends (memory_updated).
+        /// </summary>
+        public event EstuaryEvents.MemoryUpdatedHandler OnMemoryUpdated;
+
+        /// <summary>
+        /// Fired when the server rejects the connection because a policy cap was
+        /// hit (e.g. the per-share-token concurrent-session limit). A disconnect
+        /// follows; no layer of the SDK auto-reconnects.
+        /// </summary>
+        public event EstuaryEvents.SessionRejectedHandler OnSessionRejected;
+
         #endregion
 
         #region Private Fields
@@ -299,14 +319,17 @@ namespace Estuary
                     }
                 }
 
-                // Pass Unity's output sample rate so backend generates TTS at the correct rate
+                // Pass Unity's output sample rate so backend generates TTS at the correct rate.
+                // Capabilities + enable_animation come from the config asset.
                 await _client.ConnectAsync(
                     config.ServerUrl,
                     config.ApiKey,
                     _activeCharacter.CharacterId,
                     _activeCharacter.PlayerId,
                     AudioSettings.outputSampleRate,
-                    token
+                    token,
+                    config.Capabilities,
+                    config.EnableAnimation
                 );
             }
             catch (Exception e)
@@ -505,6 +528,43 @@ namespace Estuary
             await _client.NotifyInterruptAsync(messageId);
         }
 
+        /// <summary>
+        /// Send a camera image to the server for vision-language (VLM) processing.
+        /// Call in response to OnCameraCaptureRequested (echo the RequestId) or
+        /// proactively. The response flows back through the normal bot response.
+        /// </summary>
+        /// <param name="imageBase64">Base64-encoded image bytes (no data: URI prefix)</param>
+        /// <param name="mimeType">Image MIME type, e.g. "image/jpeg"</param>
+        /// <param name="requestId">Optional correlation ID from a camera_capture request</param>
+        /// <param name="text">Optional accompanying prompt text</param>
+        public async Task SendCameraImageAsync(string imageBase64, string mimeType = "image/jpeg", string requestId = null, string text = null)
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Debug.LogError("[EstuaryManager] Cannot send camera image: not connected");
+                return;
+            }
+
+            await _client.SendCameraImageAsync(imageBase64, mimeType, requestId, text);
+        }
+
+        /// <summary>
+        /// Update session-level preferences on the server.
+        /// </summary>
+        /// <param name="enableVisionAcknowledgment">
+        /// When true, the character verbally acknowledges when it looks at the camera.
+        /// </param>
+        public async Task UpdatePreferencesAsync(bool enableVisionAcknowledgment)
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Debug.LogError("[EstuaryManager] Cannot update preferences: not connected");
+                return;
+            }
+
+            await _client.UpdatePreferencesAsync(enableVisionAcknowledgment);
+        }
+
         #region Voice Mode Methods
 
         /// <summary>
@@ -684,6 +744,9 @@ namespace Estuary
             _client.OnConnectionStateChanged += HandleConnectionStateChanged;
             _client.OnSessionTimeout += HandleSessionTimeout;
             _client.OnVoiceTimeout += HandleVoiceTimeout;
+            _client.OnCameraCaptureRequested += HandleCameraCaptureRequest;
+            _client.OnMemoryUpdated += HandleMemoryUpdated;
+            _client.OnSessionRejected += HandleSessionRejected;
 
             // Subscribe to LiveKit client events
             _client.OnLiveKitTokenReceived += HandleLiveKitTokenReceived;
@@ -738,6 +801,9 @@ namespace Estuary
                 _client.OnConnectionStateChanged -= HandleConnectionStateChanged;
                 _client.OnSessionTimeout -= HandleSessionTimeout;
                 _client.OnVoiceTimeout -= HandleVoiceTimeout;
+                _client.OnCameraCaptureRequested -= HandleCameraCaptureRequest;
+                _client.OnMemoryUpdated -= HandleMemoryUpdated;
+                _client.OnSessionRejected -= HandleSessionRejected;
                 _client.OnLiveKitTokenReceived -= HandleLiveKitTokenReceived;
                 _client.OnLiveKitReady -= HandleLiveKitRoomReady;
                 _client.OnLiveKitError -= HandleLiveKitError;
@@ -933,6 +999,35 @@ namespace Estuary
             // The pending token is scoped to the deleted room; the next voice
             // start must request a fresh one (which also pre-warms the bot join).
             _pendingLiveKitToken = null;
+        }
+
+        private void HandleCameraCaptureRequest(CameraCaptureRequest request)
+        {
+            Log($"Camera capture requested: {request}");
+
+            _activeCharacter?.HandleCameraCaptureRequest(request);
+            OnCameraCaptureRequested?.Invoke(request);
+        }
+
+        private void HandleMemoryUpdated(MemoryUpdatedEvent data)
+        {
+            Log($"Memory updated: {data}");
+
+            _activeCharacter?.HandleMemoryUpdated(data);
+            OnMemoryUpdated?.Invoke(data);
+        }
+
+        private void HandleSessionRejected(SessionRejectedData data)
+        {
+            Debug.LogWarning($"[EstuaryManager] Session rejected: {data}");
+
+            // Forward to the character FIRST — the server's disconnect is queued
+            // right behind this event, and the character must flag its own
+            // auto-reconnect off before HandleDisconnected runs (same ordering
+            // as session_timeout).
+            _activeCharacter?.HandleSessionRejected(data);
+
+            OnSessionRejected?.Invoke(data);
         }
 
         private void HandleConnectionStateChanged(ConnectionState state)

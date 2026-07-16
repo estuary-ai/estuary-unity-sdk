@@ -37,16 +37,20 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 - voice_livekit: Implemented (requires LiveKit SDK). **Warm start:** the gateway allocates its bot pre-join + STT on a `livekit_token` request (voice intent), never at auth. `EstuaryManager` therefore emits the `livekit_token` request at voice intent even when an embedded session_info token is held: the embedded token still wins the race for the client-side room join (no round-trip penalty), while the request pre-warms the server's bot join. The duplicate token response is absorbed by an idle-state guard in `HandleLiveKitTokenReceived` (only auto-connects from Disconnected/RequestingToken, so the room is never bounced).
 - interrupts: Implemented
 - audio_playback_tracking: Implemented
-- vision_camera: Implemented
+- vision_camera: Implemented — full VLM round-trip. `SendCameraImage(imageBase64, mimeType, requestId?, text?)` (client → manager → character) emits `camera_image`; the server's proactive `camera_capture` request surfaces as `OnCameraCaptureRequested(CameraCaptureRequest)`. (Distinct from `EstuaryWebcam`, which streams continuous world-model video; this is the on-demand vision path. Added 2026-07-15 for parity with the TS/Python/Lens SDKs — the prior "Implemented" claim was stale, there was no code.)
 - video_streaming_livekit: Implemented (requires LiveKit SDK)
 - video_streaming_websocket: Implemented (via WebcamVideoSource fallback)
 - scene_graph: Implemented
 - device_pose: Implemented
-- preferences: Implemented
+- preferences: Implemented — `UpdatePreferences(enableVisionAcknowledgment)` (client + manager) emits `update_preferences`. NOTE: the server currently treats `enableVisionAcknowledgment` as a no-op (vision acknowledgment moved into the worker's agentic tool system); the event + field are retained for contract parity and forward-compat. (Added 2026-07-15 — the prior "Implemented" claim was stale, there was no code.)
+- session_capabilities: Implemented — the auth payload carries `capabilities {version, camera, microphone, speaker}` (per-session device declaration; server hides tools that need an absent capability). Configured via the EstuaryConfig `deviceHas*` toggles; defaults all-true (identical to omitting them). The SDK always sends a non-null object because Unity's JsonUtility serializes a null nested object as all-false. Matches the TS SDK; Python/Lens do not send it.
+- memory_push: Implemented — handles `memory_updated`, fires `OnMemoryUpdated(MemoryUpdatedEvent)` (client → manager → character). `MemoryData` uses camelCase keys (matching `Memory.to_dict()`). Matches TS/Python.
 - voice_timeout: Implemented — server voice-lane idle release (SDK_CONTRACT.md): after no user speech for `VOICE_IDLE_TIMEOUT_S` the server emits `voice_timeout`, deletes the LiveKit room / closes STT, and KEEPS the socket (text keeps working; no disconnect follows — never wired into reconnect suppression). `EstuaryClient` clears the voice-mode gate and fires `OnVoiceTimeout(VoiceTimeoutData)`; `EstuaryManager` disposes the local LiveKit room WITHOUT `livekit_leave` (the room is already gone server-side; its Disconnected event during this teardown is expected, not a call failure) and forwards to `EstuaryCharacter`, which stops the mic and clears `IsVoiceSessionActive` so the next `StartVoiceSession()` is a fresh session. Recommended UX is the auto-mute illusion (mic shows muted; unmute = `StartVoiceSession()`). Belt-and-braces: any non-client LiveKit room disconnect also clears stale voice state via `HandleVoiceTransportClosed`.
 - session_timeout: Implemented at EVERY reconnect-owning layer (Lens lesson 7/8: socket-layer suppression alone is insufficient) — `EstuaryClient.HandleSessionTimeout` fires `OnSessionTimeout(SessionTimeoutData)` and flags the disconnect that follows so the client's auto-reconnect is suppressed; the event is forwarded client → manager → character, and `EstuaryCharacter` sets its own `_serverEndedSession` flag so its component-level `autoReconnect` also skips the reap disconnect (it previously looped: reconnect → re-auth → billed voice resources → reaped again). Both flags clear on explicit connect. Resuming requires an explicit `ConnectAsync`/`Connect()` driven by user intent, per SDK_CONTRACT.md.
-- session_rejected: Documented / impl deferred — event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Unity client handler and user-visible message surfacing are deferred; the gateway will emit `session_rejected` with `reason: "concurrent_limit"` and immediately disconnect, which the SDK currently treats as a generic disconnect. Surface as a follow-up when share-token flows go consumer-facing.
+- session_rejected: Implemented — handles `session_rejected` {reason, cap, share_token_id}, fires `OnSessionRejected(SessionRejectedData)` (client → manager → character). The server disconnects immediately after, so the SDK sets the same `_serverEndedSession` suppression flag as session_timeout at BOTH the client and character layers — otherwise the trailing disconnect would auto-reconnect straight back into the concurrent-session cap in a loop. (Added 2026-07-15, upgrading the prior "impl deferred" status; the reconnect-loop was a real latent bug — no other SDK handles this event either.)
 - turn_metrics: Not consumed (web-debug only) — backend emits this OPTIONAL/debug event (SDK_CONTRACT.md contract v1.2) carrying per-response voice-latency timings for the web chat latency gizmo; no Unity handler needed. Contract v1.2 adds an optional/nullable `speech_end_ms` field (predictive-turn head-start metric); it is additive and does not change the decision to ignore the event.
+- animation_stream (`bot_animation`): Not implemented (auth opt-in only). The auth payload now carries the `enable_animation` flag (EstuaryConfig toggle, default false) so a developer CAN request ARKit-52 blendshape frames, but the Unity SDK does not yet consume/render `bot_animation` — the frames would be dropped. This matches every other SDK: the feature is EXPERIMENTAL and has no reference implementation anywhere (not even the TS SDK). Render support is a future item; requires a 16 kHz connect + server `ENABLE_A2F=true`.
+- encounter: Not implemented — the 2-character agent-to-agent Encounter (`subscribe_encounter` / `encounter_*` + `POST /api/encounters`) is Lens-Studio-only at MVP per SDK_CONTRACT.md. Add here if/when Encounter is promoted beyond the Lens SDK.
 
 ## Architecture
 
@@ -105,7 +109,15 @@ OnSceneGraphUpdate(SceneGraphUpdate)
 OnQuotaExceeded(QuotaExceededData)
 OnSessionTimeout(SessionTimeoutData)  // Server idle-timeout; no auto-reconnect (any layer) — resume via ConnectAsync
 OnVoiceTimeout(VoiceTimeoutData)      // Server voice-idle release; socket stays, text continues — restart voice on user intent
+OnCameraCaptureRequested(CameraCaptureRequest) // Server asks for an image — respond with SendCameraImage(...)
+OnMemoryUpdated(MemoryUpdatedEvent)   // Newly extracted memories pushed after a conversation ends
+OnSessionRejected(SessionRejectedData) // Policy cap hit (e.g. concurrent-session limit); disconnect follows, no auto-reconnect
 ```
+
+Outbound methods added for parity: `SendCameraImage(imageBase64, mimeType, requestId?, text?)` and
+`UpdatePreferences(enableVisionAcknowledgment)` on both `EstuaryManager` and `EstuaryCharacter`
+(with `...Async` variants on the client). The auth payload additionally carries `capabilities`
+(from EstuaryConfig `deviceHas*` toggles) and `enable_animation`.
 
 ## Code Style
 

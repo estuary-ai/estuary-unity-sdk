@@ -129,6 +129,27 @@ namespace Estuary
         /// </summary>
         public event EstuaryEvents.RoomIdentifiedHandler OnRoomIdentified;
 
+        /// <summary>
+        /// Fired when the server proactively requests a camera image (it detected
+        /// vision intent). Capture a frame and reply via SendCameraImageAsync with
+        /// the request's RequestId.
+        /// </summary>
+        public event EstuaryEvents.CameraCaptureRequestHandler OnCameraCaptureRequested;
+
+        /// <summary>
+        /// Fired when the server pushes newly extracted memories after a
+        /// conversation ends (memory_updated).
+        /// </summary>
+        public event EstuaryEvents.MemoryUpdatedHandler OnMemoryUpdated;
+
+        /// <summary>
+        /// Fired when the server rejects the connection because a policy cap was
+        /// hit (e.g. the per-share-token concurrent-session limit). A disconnect
+        /// follows immediately; the SDK suppresses auto-reconnect (same as
+        /// session_timeout) so it does not loop against the cap.
+        /// </summary>
+        public event EstuaryEvents.SessionRejectedHandler OnSessionRejected;
+
         #endregion
 
         #region Properties
@@ -168,6 +189,8 @@ namespace Estuary
         private string _playerId;
         private int _audioSampleRate;
         private string _token;
+        private SessionCapabilities _capabilities;
+        private bool _enableAnimation;
 
         private CancellationTokenSource _cancellationTokenSource;
         private int _reconnectAttempts;
@@ -196,7 +219,9 @@ namespace Estuary
         /// <param name="playerId">Unique player identifier for conversation persistence</param>
         /// <param name="audioSampleRate">TTS playback sample rate (default: 48000 for Unity)</param>
         /// <param name="token">Optional Firebase Bearer token for authenticated connections</param>
-        public async Task ConnectAsync(string serverUrl, string apiKey, string characterId, string playerId, int audioSampleRate = 48000, string token = null)
+        /// <param name="capabilities">Optional per-session device capability declaration (camera/mic/speaker). When null, all default to true (server behavior when omitted).</param>
+        /// <param name="enableAnimation">Opt in to receive bot_animation blendshape frames for lipsync. Requires the server to have A2F enabled AND audioSampleRate 16000. Default false.</param>
+        public async Task ConnectAsync(string serverUrl, string apiKey, string characterId, string playerId, int audioSampleRate = 48000, string token = null, SessionCapabilities capabilities = null, bool enableAnimation = false)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(EstuaryClient));
@@ -216,6 +241,8 @@ namespace Estuary
             _playerId = playerId;
             _audioSampleRate = audioSampleRate;
             _token = token;
+            _capabilities = capabilities;
+            _enableAnimation = enableAnimation;
             _serverEndedSession = false;  // explicit user intent overrides a prior idle timeout
 
             await ConnectInternalAsync();
@@ -309,6 +336,76 @@ namespace Estuary
         {
             public string text;
             public bool text_only;
+        }
+
+        /// <summary>
+        /// Send a camera image to the server for vision-language (VLM) processing.
+        /// Call this in response to an OnCameraCaptureRequested event (echo the
+        /// request's RequestId) or proactively to give the character something to
+        /// look at. The response flows back through the normal bot_response +
+        /// bot_voice events.
+        /// </summary>
+        /// <param name="imageBase64">Base64-encoded image bytes (no data: URI prefix)</param>
+        /// <param name="mimeType">Image MIME type, e.g. "image/jpeg"</param>
+        /// <param name="requestId">Optional correlation ID from a camera_capture request</param>
+        /// <param name="text">Optional accompanying prompt text</param>
+        public async Task SendCameraImageAsync(string imageBase64, string mimeType = "image/jpeg", string requestId = null, string text = null)
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot send camera image: not connected");
+                return;
+            }
+            if (string.IsNullOrEmpty(imageBase64))
+            {
+                LogError("Cannot send camera image: image is empty");
+                return;
+            }
+
+            var payload = new CameraImagePayload
+            {
+                image = imageBase64,
+                mime_type = mimeType,
+                request_id = requestId,
+                text = text
+            };
+            await _socket.EmitAsync("camera_image", payload);
+            Log($"Sent camera image (mime={mimeType}, requestId={requestId ?? "none"}, base64Len={imageBase64.Length})");
+        }
+
+        [Serializable]
+        private class CameraImagePayload
+        {
+            public string image;
+            public string mime_type;
+            public string request_id;
+            public string text;
+        }
+
+        /// <summary>
+        /// Update session-level preferences on the server.
+        /// </summary>
+        /// <param name="enableVisionAcknowledgment">
+        /// When true, the character verbally acknowledges when it looks at the
+        /// camera (e.g. "let me take a look").
+        /// </param>
+        public async Task UpdatePreferencesAsync(bool enableVisionAcknowledgment)
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot update preferences: not connected");
+                return;
+            }
+
+            var payload = new UpdatePreferencesPayload { enableVisionAcknowledgment = enableVisionAcknowledgment };
+            await _socket.EmitAsync("update_preferences", payload);
+            Log($"Updated preferences (enableVisionAcknowledgment={enableVisionAcknowledgment})");
+        }
+
+        [Serializable]
+        private class UpdatePreferencesPayload
+        {
+            public bool enableVisionAcknowledgment;
         }
 
         /// <summary>
@@ -599,6 +696,11 @@ namespace Estuary
                 _socket.On("scene_graph_update", HandleSceneGraphUpdate);
                 _socket.On("room_identified", HandleRoomIdentified);
 
+                // Vision, memory, and session-policy event handlers
+                _socket.On("camera_capture", HandleCameraCaptureRequest);
+                _socket.On("memory_updated", HandleMemoryUpdated);
+                _socket.On("session_rejected", HandleSessionRejected);
+
                 // Connect WITH auth - Socket.IO v4 passes auth in the namespace connect message
                 var auth = new AuthenticateData
                 {
@@ -606,7 +708,14 @@ namespace Estuary
                     character_id = _characterId,
                     player_id = _playerId,
                     audio_sample_rate = _audioSampleRate,
-                    token = _token  // Will be null if not using Firebase auth
+                    token = _token,  // Will be null if not using Firebase auth
+                    // Always send a non-null capabilities object. JsonUtility would
+                    // serialize a null nested object as all-false, which would
+                    // wrongly disable every device tool; a default instance is all
+                    // true, identical to the server's omit-default (see
+                    // SessionCapabilities).
+                    capabilities = _capabilities ?? new SessionCapabilities(),
+                    enable_animation = _enableAnimation
                 };
                 await _socket.ConnectAsync(_serverUrl, SDK_NAMESPACE, auth);
                 Log($"Connecting to {_serverUrl}{SDK_NAMESPACE} with auth for character {_characterId}, audio_sample_rate={_audioSampleRate}Hz...");
@@ -644,6 +753,8 @@ namespace Estuary
             public string player_id;
             public int audio_sample_rate;
             public string token;  // Firebase Bearer token (optional)
+            public SessionCapabilities capabilities;  // per-session device capability declaration
+            public bool enable_animation;  // opt in to bot_animation blendshape frames
         }
         
         [Serializable]
@@ -1098,6 +1209,68 @@ namespace Estuary
             {
                 LogError($"Failed to parse room_identified: {e.Message}");
             }
+        }
+
+        private void HandleCameraCaptureRequest(string json)
+        {
+            try
+            {
+                var request = string.IsNullOrEmpty(json)
+                    ? new CameraCaptureRequest()
+                    : CameraCaptureRequest.FromJson(json);
+                Log($"Received camera_capture request: {request}");
+                DispatchToMainThread(() => OnCameraCaptureRequested?.Invoke(request));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse camera_capture: {e.Message}");
+            }
+        }
+
+        private void HandleMemoryUpdated(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return;
+            }
+
+            try
+            {
+                var data = MemoryUpdatedEvent.FromJson(json);
+                Log($"Received memory_updated: {data}");
+                DispatchToMainThread(() => OnMemoryUpdated?.Invoke(data));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse memory_updated: {e.Message}");
+            }
+        }
+
+        private void HandleSessionRejected(string json)
+        {
+            SessionRejectedData data = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(json))
+                {
+                    data = SessionRejectedData.FromJson(json);
+                }
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse session_rejected: {e.Message}");
+            }
+
+            data = data ?? new SessionRejectedData();
+            LogError($"Server rejected the session: {data}");
+
+            // The server disconnects this socket right after session_rejected —
+            // flag it so HandleDisconnected does NOT auto-reconnect. Blindly
+            // reconnecting would just hit the same policy cap again in a loop
+            // (mirrors session_timeout's suppression).
+            _serverEndedSession = true;
+
+            DispatchToMainThread(() => OnSessionRejected?.Invoke(data));
         }
 
         private async Task HandleReconnect()

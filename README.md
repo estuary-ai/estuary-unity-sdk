@@ -9,9 +9,14 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
   - **WebSocket Mode**: Fallback mode using Socket.IO for audio streaming
 - **Text Chat**: Send and receive text messages with AI characters
 - **Streaming Responses**: Receive bot responses as they're generated
+- **Scripted Lines**: Make the character say prewritten lines via `SayLine` (skips the LLM)
+- **Vision (VLM)**: Send camera images for the character to "see" (`SendCameraImage`), and respond to the server's proactive capture requests (`OnCameraCaptureRequested`)
 - **Conversation Persistence**: Conversations are persisted per player-character pair
+- **Memory Push**: Receive newly extracted memories in real time after a conversation (`OnMemoryUpdated`)
 - **Action Parsing**: Parse XML-style action tags from bot responses (e.g., `<action name="wave" />`)
-- **World Model Integration**: Stream webcam video for spatial awareness (coming soon)
+- **Session Lifecycle**: First-class handling of idle `session_timeout` / `voice_timeout` reaps and policy `session_rejected` (concurrent-session cap) — all with correct no-auto-reconnect suppression
+- **Device Capabilities**: Declare camera/mic/speaker availability per session so the character only offers tools the device supports
+- **World Model Integration**: Stream webcam video (LiveKit or WebSocket) for spatial awareness + scene-graph updates
 
 ## Requirements
 
@@ -366,6 +371,10 @@ webcam.OnRoomIdentified += (RoomIdentified room) =>
 | `CharacterId` | (required) | Character UUID |
 | `PlayerId` | (required) | Player identifier |
 | `VoiceMode` | `LiveKit` | Voice communication mode |
+| `deviceHasCamera` | `true` | Declare device camera; when off, camera/vision tools are hidden from the character |
+| `deviceHasMicrophone` | `true` | Declare device microphone |
+| `deviceHasSpeaker` | `true` | Declare device speaker |
+| `enableAnimation` | `false` | Opt in to `bot_animation` blendshape frames (auth flag only — frames are not yet rendered; requires 16 kHz connect + server A2F) |
 | `AutoConnectLiveKit` | `true` | Auto-connect LiveKit on session |
 | `RecordingSampleRate` | `16000`/`48000` | Microphone sample rate |
 | `PlaybackSampleRate` | `24000` | Voice playback sample rate |
@@ -441,11 +450,18 @@ void Disconnect()
 // Text Chat
 void SendText(string message)
 Task SendTextAsync(string message)
+void SayLine(string text, bool textOnly = false)   // scripted line (skips the LLM)
+
+// Vision
+void SendCameraImage(string imageBase64, string mimeType = "image/jpeg", string requestId = null, string text = null)
 
 // Voice
 void StartVoiceSession()
 void EndVoiceSession()
 void Interrupt()
+
+// Events (C#): OnCameraCaptureRequested, OnMemoryUpdated, OnSessionRejected,
+//              OnSessionTimeout, OnVoiceTimeout (plus OnBotResponse, OnVoiceReceived, ...)
 ```
 
 ### EstuaryManager Methods
@@ -461,6 +477,10 @@ Task DisconnectAsync()
 void RegisterCharacter(EstuaryCharacter character)
 void UnregisterCharacter(EstuaryCharacter character)
 void SetActiveCharacter(EstuaryCharacter character)
+
+// Vision & Preferences
+Task SendCameraImageAsync(string imageBase64, string mimeType = "image/jpeg", string requestId = null, string text = null)
+Task UpdatePreferencesAsync(bool enableVisionAcknowledgment)
 
 // LiveKit
 Task RequestLiveKitTokenAsync()

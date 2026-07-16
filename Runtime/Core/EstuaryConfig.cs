@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using UnityEngine;
+using Estuary.Models;
 
 namespace Estuary
 {
@@ -48,6 +49,24 @@ namespace Estuary
         [Tooltip("Voice communication mode. LiveKit provides lower latency WebRTC streaming.")]
         private VoiceMode voiceMode = VoiceMode.LiveKit;
 
+        [Header("Session Capabilities")]
+        [SerializeField]
+        [Tooltip("Declare that this device has a usable camera. When off, camera/vision tools are hidden from the character for the session.")]
+        private bool deviceHasCamera = true;
+
+        [SerializeField]
+        [Tooltip("Declare that this device has a usable microphone. When off, mic-dependent tools are hidden.")]
+        private bool deviceHasMicrophone = true;
+
+        [SerializeField]
+        [Tooltip("Declare that this device has a usable speaker.")]
+        private bool deviceHasSpeaker = true;
+
+        [Header("Animation (experimental)")]
+        [SerializeField]
+        [Tooltip("Opt in to bot_animation ARKit-52 blendshape frames for lipsync. Requires the server to have A2F enabled AND a 16kHz connect. NOTE: the Unity SDK does not yet render these frames — see CLAUDE.md parity.")]
+        private bool enableAnimation = false;
+
         [Header("Debug")]
         [SerializeField]
         [Tooltip("Enable debug logging")]
@@ -88,6 +107,21 @@ namespace Estuary
         /// Whether LiveKit mode is enabled.
         /// </summary>
         public bool IsLiveKitEnabled => voiceMode == VoiceMode.LiveKit;
+
+        /// <summary>
+        /// Per-session device capability declaration sent in the auth payload.
+        /// Built from the deviceHas* toggles. Never null — defaults are all true,
+        /// matching the server's behavior when capabilities are omitted.
+        /// </summary>
+        public SessionCapabilities Capabilities =>
+            new SessionCapabilities(deviceHasCamera, deviceHasMicrophone, deviceHasSpeaker);
+
+        /// <summary>
+        /// Whether to opt in to bot_animation blendshape frames. See the field
+        /// tooltip — the Unity SDK does not yet render these; opting in only sets
+        /// the auth flag.
+        /// </summary>
+        public bool EnableAnimation => enableAnimation;
 
         /// <summary>
         /// Enable debug logging.
