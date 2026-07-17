@@ -16,6 +16,16 @@
             "name": "io.livekit.livekit-sdk",
             "expression": "",
             "define": "ESTUARY_LIVEKIT"
+        },
+        {
+            "name": "com.unity.cloud.gltfast",
+            "expression": "",
+            "define": "ESTUARY_GLTFAST"
+        },
+        {
+            "name": "com.atteneder.gltfast",
+            "expression": "",
+            "define": "ESTUARY_GLTFAST"
         }
     ],
     "noEngineReferences": false

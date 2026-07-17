@@ -1,0 +1,30 @@
+{
+    "name": "Estuary.glTFast",
+    "rootNamespace": "Estuary",
+    "references": [
+        "Estuary",
+        "glTFast"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "ESTUARY_GLTFAST"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.cloud.gltfast",
+            "expression": "",
+            "define": "ESTUARY_GLTFAST"
+        },
+        {
+            "name": "com.atteneder.gltfast",
+            "expression": "",
+            "define": "ESTUARY_GLTFAST"
+        }
+    ],
+    "noEngineReferences": false
+}

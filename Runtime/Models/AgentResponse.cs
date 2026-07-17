@@ -19,6 +19,27 @@ namespace Estuary.Models
         [JsonProperty("modelPreviewUrl")] public string ModelPreviewUrl;
         [JsonProperty("modelStatus")] public string ModelStatus;
         [JsonProperty("sourceImageUrl")] public string SourceImageUrl;
+
+        /// <summary>
+        /// 3D model generation provider: "tripo" (default) or "meshy". Drives the
+        /// orientation fix when instantiating the GLB — the two providers export
+        /// with different forward axes. May be null on older agents.
+        /// </summary>
+        [JsonProperty("modelProvider")] public string ModelProvider;
+
+        /// <summary>Voice id generated for this character (if any). Null when not generated.</summary>
+        [JsonProperty("generatedVoiceId")] public string GeneratedVoiceId;
+
+        /// <summary>True when a textured or preview GLB is ready to load into a scene.</summary>
+        public bool HasLoadableModel =>
+            ModelStatus == "completed" || ModelStatus == "texture_failed";
+
+        /// <summary>
+        /// The best URL to load: the textured model when available, otherwise the
+        /// untextured preview (used when texturing failed but the mesh is usable).
+        /// </summary>
+        public string BestModelUrl =>
+            !string.IsNullOrEmpty(ModelUrl) ? ModelUrl : ModelPreviewUrl;
     }
 
     /// <summary>

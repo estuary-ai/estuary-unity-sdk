@@ -17,6 +17,7 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 - **Session Lifecycle**: First-class handling of idle `session_timeout` / `voice_timeout` reaps and policy `session_rejected` (concurrent-session cap) — all with correct no-auto-reconnect suppression
 - **Device Capabilities**: Declare camera/mic/speaker availability per session so the character only offers tools the device supports
 - **World Model Integration**: Stream webcam video (LiveKit or WebSocket) for spatial awareness + scene-graph updates
+- **3D Character Models**: Download a character's Estuary-generated 3D model (GLB) and instantiate it as a GameObject at runtime (`EstuaryModelLoader`). Requires the optional glTFast importer.
 
 ## Requirements
 
@@ -359,6 +360,72 @@ webcam.OnRoomIdentified += (RoomIdentified room) =>
     Debug.Log($"Location: {room.RoomName}");  // "Living Room"
 };
 ```
+
+## 3D Character Models
+
+`EstuaryModelLoader` downloads a character's Estuary-generated 3D model (a GLB produced by the
+image-to-character → generate-model pipeline) and instantiates it as a GameObject at runtime.
+
+### Requirements
+
+Runtime GLB import needs a glTF importer. This is an **optional** dependency (the rest of the SDK
+compiles and runs without it), wired the same way as LiveKit:
+
+- Install via the menu: **`Estuary > Install glTF Importer (glTFast)`**, or add
+  `com.unity.cloud.gltfast` in Package Manager (Add package by name).
+- With glTFast absent, `EstuaryModelLoader` fails loads with a clear "install a glTF importer"
+  message rather than a compile error.
+
+### Usage
+
+```csharp
+public class CharacterModelExample : MonoBehaviour
+{
+    public EstuaryConfig config;
+    public Transform spawnPoint;
+
+    void Start()
+    {
+        var loader = gameObject.AddComponent<EstuaryModelLoader>();
+        loader.SetConfig(config);
+
+        // (a) Load by agent id — resolves the ready model URL + provider automatically:
+        loader.LoadForAgent(
+            "your-agent-uuid",
+            onSuccess: go => Debug.Log($"Loaded model: {go.name}"),
+            onError:   msg => Debug.LogError(msg));
+
+        // (b) Or load directly from a known URL (e.g. AgentResponse.BestModelUrl):
+        // loader.LoadFromUrl(agent.BestModelUrl, agent.ModelProvider);
+    }
+}
+```
+
+Only characters whose `modelStatus` is `completed` (or `texture_failed`, which falls back to the
+untextured preview) have a loadable model. To generate one first, call
+`EstuaryHttpClient.GenerateModel` then `PollModelStatus` — or enable the loader's
+`pollUntilReady` flag.
+
+### EstuaryModelLoader Properties
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `config` | (required) | EstuaryConfig for the REST calls |
+| `spawnParent` | this transform | Where the instantiated model is parented |
+| `normalizeHeight` | `0` | If > 0, uniformly scale so the model is this many meters tall (`0` = native scale) |
+| `tripoRotationOffset` | `(0,-90,0)` | Extra local rotation for Tripo models (they import facing -X in Unity; -90° yaw faces +Z — verified live) |
+| `meshyRotationOffset` | `(0,0,0)` | Extra local rotation for Meshy models (already face the camera) |
+| `pollUntilReady` | `false` | If the model isn't ready, poll `model-status` until it completes before loading |
+| `replaceExisting` | `true` | Destroy the previously loaded model before instantiating a new one |
+
+| Member | Description |
+|--------|-------------|
+| `CurrentModel` | The most recently instantiated model root |
+| `OnModelLoaded(GameObject)` | Fired on a successful load |
+| `OnModelLoadFailed(string)` | Fired with an error message on failure |
+
+> **Note:** models load as **static meshes** (no glTF skeletal-animation playback yet). Drive
+> them with your own animator/behavior scripts, as the Vision Pro client does for its characters.
 
 ## Configuration Reference
 

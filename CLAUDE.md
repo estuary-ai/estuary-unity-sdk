@@ -23,6 +23,7 @@ camera_capture: true                   # WebcamTexture
 livekit_video: true                    # LiveKitVideoManager - continuous video streaming
 scene_graph: true                      # Subscribe to world model updates
 device_pose: true                      # Unity XR subsystem (XRInputSubsystem)
+character_model_loading: true          # Runtime GLB import via glTFast (io.livekit-style optional dep)
 min_audio_sample_rate: 16000
 max_audio_sample_rate: 48000
 default_playback_sample_rate: 24000    # TTS audio generated at 24kHz by default
@@ -48,6 +49,7 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 - voice_timeout: Implemented — server voice-lane idle release (SDK_CONTRACT.md): after no user speech for `VOICE_IDLE_TIMEOUT_S` the server emits `voice_timeout`, deletes the LiveKit room / closes STT, and KEEPS the socket (text keeps working; no disconnect follows — never wired into reconnect suppression). `EstuaryClient` clears the voice-mode gate and fires `OnVoiceTimeout(VoiceTimeoutData)`; `EstuaryManager` disposes the local LiveKit room WITHOUT `livekit_leave` (the room is already gone server-side; its Disconnected event during this teardown is expected, not a call failure) and forwards to `EstuaryCharacter`, which stops the mic and clears `IsVoiceSessionActive` so the next `StartVoiceSession()` is a fresh session. Recommended UX is the auto-mute illusion (mic shows muted; unmute = `StartVoiceSession()`). Belt-and-braces: any non-client LiveKit room disconnect also clears stale voice state via `HandleVoiceTransportClosed`.
 - session_timeout: Implemented at EVERY reconnect-owning layer (Lens lesson 7/8: socket-layer suppression alone is insufficient) — `EstuaryClient.HandleSessionTimeout` fires `OnSessionTimeout(SessionTimeoutData)` and flags the disconnect that follows so the client's auto-reconnect is suppressed; the event is forwarded client → manager → character, and `EstuaryCharacter` sets its own `_serverEndedSession` flag so its component-level `autoReconnect` also skips the reap disconnect (it previously looped: reconnect → re-auth → billed voice resources → reaped again). Both flags clear on explicit connect. Resuming requires an explicit `ConnectAsync`/`Connect()` driven by user intent, per SDK_CONTRACT.md.
 - session_rejected: Implemented — handles `session_rejected` {reason, cap, share_token_id}, fires `OnSessionRejected(SessionRejectedData)` (client → manager → character). The server disconnects immediately after, so the SDK sets the same `_serverEndedSession` suppression flag as session_timeout at BOTH the client and character layers — otherwise the trailing disconnect would auto-reconnect straight back into the concurrent-session cap in a loop. (Added 2026-07-15, upgrading the prior "impl deferred" status; the reconnect-loop was a real latent bug — no other SDK handles this event either.)
+- character_model_loading: Implemented — runtime download + instantiation of a character's Estuary-generated 3D model (GLB) as a GameObject. `EstuaryModelLoader` (component) exposes `LoadForAgent(agentId)` and `LoadFromUrl(modelUrl, provider)`; it reuses `EstuaryHttpClient` (`GetAgents`/`PollModelStatus`/`DownloadGlb`) to resolve the ready GLB URL, downloads it, and instantiates via an **optional** glTF importer. The importer follows the LiveKit optional-dependency pattern exactly: `IEstuaryModelLoader` + `ModelLoaderBridge` (core) with a glTFast-backed impl in the define-gated `Estuary.glTFast` assembly (`ESTUARY_GLTFAST`, set by a `versionDefine` on `com.unity.cloud.gltfast`/`com.atteneder.gltfast`) — so the core assembly compiles with zero errors when glTFast is absent, and the loader surfaces a clear "install a glTF importer" error at runtime instead. Install via `Estuary > Install glTF Importer (glTFast)`. Provider-aware orientation offset (`AgentResponse.modelProvider` drives it): Tripo GLBs import facing -X in Unity, so the default `tripoRotationOffset` is `(0, -90, 0)` to face +Z — **verified live** against a real Tripo character (renders + textures + faces camera). Meshy default is identity (untested in Unity, corroborated by the frontend). Plus optional height normalization. Mirrors the web frontend's `Model3DViewer` flow (poll status → load textured `modelUrl`, fall back to `modelPreviewUrl` on `texture_failed`). NOTE: models load as **static meshes** — no glTF skeletal-animation playback yet (matches the frontend, which drives only procedural motion). **Verified end-to-end** 2026-07-16 in `estuary_unity_testing` against prod: GetAgents → DownloadGlb (~1.75MB) → glTFast import → instantiated `EstuaryCharacterModel`.
 - turn_metrics: Not consumed (web-debug only) — backend emits this OPTIONAL/debug event (SDK_CONTRACT.md contract v1.2) carrying per-response voice-latency timings for the web chat latency gizmo; no Unity handler needed. Contract v1.2 adds an optional/nullable `speech_end_ms` field (predictive-turn head-start metric); it is additive and does not change the decision to ignore the event.
 - animation_stream (`bot_animation`): Not implemented (auth opt-in only). The auth payload now carries the `enable_animation` flag (EstuaryConfig toggle, default false) so a developer CAN request ARKit-52 blendshape frames, but the Unity SDK does not yet consume/render `bot_animation` — the frames would be dropped. This matches every other SDK: the feature is EXPERIMENTAL and has no reference implementation anywhere (not even the TS SDK). Render support is a future item; requires a 16 kHz connect + server `ENABLE_A2F=true`.
 - encounter: Not implemented — the 2-character agent-to-agent Encounter (`subscribe_encounter` / `encounter_*` + `POST /api/encounters`) is Lens-Studio-only at MVP per SDK_CONTRACT.md. Add here if/when Encounter is promoted beyond the Lens SDK.
@@ -62,14 +64,22 @@ Runtime/
 |   +-- EstuaryMicrophone    - Audio capture (Unity Mic or LiveKit native)
 |   +-- EstuaryAudioSource   - TTS playback via AudioSource
 |   +-- EstuaryWebcam        - Video streaming (LiveKit or WebSocket)
+|   +-- EstuaryModelLoader   - Downloads a character's GLB and instantiates it as a GameObject
 |   +-- EstuaryActionManager - Parses XML action tags from bot responses
 +-- Core/                # Low-level client logic (no LiveKit dependency)
 |   +-- EstuaryClient        - Socket.IO v4 client (manual protocol impl)
 |   +-- EstuaryConfig        - ScriptableObject configuration asset
 |   +-- EstuaryEvents        - Event definitions, enums, LiveKitTokenResponse
+|   +-- EstuaryHttpClient    - REST client (agents list, model generate/status, GLB download)
 |   +-- ILiveKitVoiceManager - Interface for voice manager abstraction
 |   +-- ILiveKitVideoManager - Interface for video manager abstraction
 |   +-- LiveKitBridge        - Service locator for optional LiveKit integration
+|   +-- IEstuaryModelLoader  - Interface for the optional runtime glTF importer
+|   +-- ModelLoaderBridge    - Service locator for optional glTF import (glTFast)
++-- glTFast/             # glTFast-dependent code (separate assembly, only compiles with glTFast)
+|   +-- Estuary.glTFast.asmdef - defineConstraints: [ESTUARY_GLTFAST]
+|   +-- GltfastModelLoader     - Runtime GLB import via GLTFast.GltfImport (implements IEstuaryModelLoader)
+|   +-- GltfastRegistrar       - Auto-registers the loader factory on app start
 +-- LiveKit/             # LiveKit-dependent code (separate assembly, only compiles with LiveKit SDK)
 |   +-- Estuary.LiveKit.asmdef - defineConstraints: [ESTUARY_LIVEKIT]
 |   +-- LiveKitRegistrar      - Auto-registers factories on app start
