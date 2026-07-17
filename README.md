@@ -2,6 +2,8 @@
 
 Unity SDK for integrating Estuary AI characters with real-time voice and text chat capabilities into Unity games and applications.
 
+> **New here?** The quickest way to start is the [**Estuary Unity SDK Template**](https://github.com/estuary-ai/estuary-unity-sdk-template) — a ready-made Unity 6 project wired for voice chat. Clone it, add your API key + character, and press Play.
+
 ## Features
 
 - **Real-time Voice Chat**: Two modes available:
