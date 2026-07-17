@@ -23,7 +23,8 @@ namespace Estuary
 
             var import = new GltfImport();
 
-            bool loaded = await import.LoadGltfBinary(glb, null, null, cancellationToken);
+            // glTFast's generic Load handles GLB (binary) input; LoadGltfBinary is obsolete.
+            bool loaded = await import.Load(glb, null, null, cancellationToken);
             if (!loaded)
             {
                 Debug.LogError("[Estuary] GltfastModelLoader: failed to parse GLB.");

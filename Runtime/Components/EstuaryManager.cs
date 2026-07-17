@@ -37,7 +37,11 @@ namespace Estuary
                 {
                     if (_instance == null)
                     {
+#if UNITY_2022_2_OR_NEWER
+                        _instance = FindFirstObjectByType<EstuaryManager>();
+#else
                         _instance = FindObjectOfType<EstuaryManager>();
+#endif
 
                         if (_instance == null)
                         {

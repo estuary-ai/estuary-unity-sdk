@@ -44,7 +44,7 @@ Unity Package Manager does not resolve transitive Git URL dependencies, so you m
    https://github.com/Estuary-AI/estuary-unity-sdk.git
    ```
 
-> **Auto-installer:** If you skip step 4, the SDK includes an Editor auto-installer that will detect the missing LiveKit dependency and offer to install it for you. However, adding LiveKit first (as shown above) is the recommended approach.
+> **Auto-installer:** If you skip step 4, the SDK includes an Editor auto-installer that will detect the missing LiveKit dependency and offer to install it for you — along with the built-in `com.unity.modules.screencapture` module that LiveKit's video capture requires (without it you'd hit `The name 'ScreenCapture' does not exist` errors on a lean/URP project). Adding LiveKit first (as shown above) is still the recommended approach.
 
 ### Option 2: Manual Installation
 
@@ -53,6 +53,10 @@ Unity Package Manager does not resolve transitive Git URL dependencies, so you m
 3. Ensure the [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) is also installed
 
 ## Quick Start
+
+> **Fastest start:** clone the ready-made [**estuary-unity-sdk-template**](https://github.com/estuary-ai/estuary-unity-sdk-template) — a Unity 6 project already wired for desktop LiveKit voice (scene, config, and an on-screen HUD). Otherwise follow the manual steps below.
+>
+> **Tip:** `GameObject > Estuary > AI Character` creates a fully-wired character (EstuaryCharacter + EstuaryAudioSource + EstuaryMicrophone, cross-referenced). Adding an `EstuaryCharacter` via *Add Component* auto-wires the same voice stack.
 
 ### 1. Create Configuration
 
@@ -464,6 +468,12 @@ config.SetServerUrlRuntime("https://your-server.com");
 var config = EstuaryConfig.CreateForDevelopment("est_your_key", "http://localhost:4001");
 ```
 
+> **Keep your API key out of source control.** The `API Key` on an `EstuaryConfig`
+> asset is a serialized field — committing the asset commits the key. For anything
+> shared or shipped, leave the asset's key blank and inject it at runtime with
+> `SetApiKeyRuntime(...)` (or a `TokenProvider` for Firebase/Bearer auth) from a
+> source that isn't committed.
+
 ## Platform Support
 
 | Platform | Text Chat | Voice (LiveKit) | Voice (WebSocket) |
@@ -492,7 +502,8 @@ var config = EstuaryConfig.CreateForDevelopment("est_your_key", "http://localhos
 ### LiveKit Issues
 
 1. **"LiveKit SDK not available"**: Install the LiveKit Unity SDK via Package Manager (see [Installation](#installation))
-2. **Connection failed**: Ensure LiveKit server is running and accessible
+2. **`The name 'ScreenCapture' does not exist` (compile error after adding LiveKit)**: your project is missing the built-in `com.unity.modules.screencapture` module that LiveKit's video sources need. The Estuary auto-installer adds it for you; to add it manually, use Package Manager (`+ > Add package by name...` → `com.unity.modules.screencapture`).
+3. **Connection failed**: Ensure LiveKit server is running and accessible
 
 ## Sample Projects
 

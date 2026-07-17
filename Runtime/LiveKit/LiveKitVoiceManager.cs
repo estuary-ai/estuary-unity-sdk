@@ -890,7 +890,11 @@ namespace Estuary
             yield return null;
 
             // Find AudioSources that might be the LiveKit audio output
+#if UNITY_2022_2_OR_NEWER
+            var audioSources = UnityEngine.Object.FindObjectsByType<AudioSource>(FindObjectsSortMode.None);
+#else
             var audioSources = UnityEngine.Object.FindObjectsOfType<AudioSource>();
+#endif
             int configuredCount = 0;
 
             foreach (var source in audioSources)

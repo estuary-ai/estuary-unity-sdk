@@ -261,6 +261,29 @@ namespace Estuary
 
         #region Unity Lifecycle
 
+        /// <summary>
+        /// Editor auto-wiring. Runs when the component is added (or Reset) in the
+        /// Editor: ensures the voice stack exists and is hooked up so the character
+        /// "just works" — an <see cref="EstuaryAudioSource"/> for TTS playback and an
+        /// <see cref="EstuaryMicrophone"/> for input, with the mic pointed back at
+        /// this character. Existing references are never overwritten.
+        /// </summary>
+        private void Reset()
+        {
+            if (audioSource == null)
+                audioSource = GetComponent<EstuaryAudioSource>();
+            if (audioSource == null)
+                audioSource = gameObject.AddComponent<EstuaryAudioSource>();
+
+            if (microphone == null)
+                microphone = GetComponent<EstuaryMicrophone>();
+            if (microphone == null)
+                microphone = gameObject.AddComponent<EstuaryMicrophone>();
+
+            if (microphone != null)
+                microphone.TargetCharacter = this;
+        }
+
         private void Awake()
         {
             ValidateSettings();
