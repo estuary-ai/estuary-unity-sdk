@@ -118,6 +118,17 @@ namespace Estuary
             }
         }
 
+        /// <summary>
+        /// Safety-net delay (seconds) for restoring bot audio after an interrupt mute.
+        /// The normal unmute happens when the new response's bot_voice metadata arrives
+        /// (<see cref="NotifyAudioChunk"/>). But the WebRTC audio can start playing before that
+        /// metadata is processed, leaving the first chunk muted. If no new-message metadata
+        /// arrives within this window, the bot audio is auto-unmuted anyway so the response
+        /// isn't clipped. Tune per device: too short may bleed a little of the interrupted
+        /// tail; too long re-introduces first-chunk clipping. Default 0.25s.
+        /// </summary>
+        public float AutoUnmuteDelaySeconds { get; set; } = 0.25f;
+
         #endregion
 
         #region Private Fields
@@ -136,6 +147,12 @@ namespace Estuary
         private string _currentMessageId;  // Current message being played
         private string _interruptedMessageId;  // Message that was interrupted (to filter out)
         private float _lastInterruptTimestamp;  // Timestamp of last interrupt (to filter stale audio)
+
+        // Bounded safety-net unmute: armed when an interrupt mutes the bot audio, disarmed by any
+        // real unmute (metadata fast-path). Fixes the first-chunk-muted race where a new response's
+        // WebRTC audio plays before its bot_voice metadata is processed to restore volume.
+        private bool _autoUnmutePending;
+        private float _autoUnmuteDeadline;  // Time.realtimeSinceStartup deadline; 0 = arm on next main-thread tick
 
         private float _outputVolume = 1f;
         private bool _disposed;
@@ -628,6 +645,13 @@ namespace Estuary
             try
             {
                 _botAudioMuted = muted;
+
+                // Arm the bounded safety-net on mute (interrupt); disarm on any real unmute.
+                // Deadline is computed on the main thread in ProcessMainThreadQueue (Time is
+                // main-thread only, and MuteBotAudio may be called from an async interrupt path).
+                _autoUnmutePending = muted;
+                _autoUnmuteDeadline = 0f;
+
                 bool success = false;
 
                 // Use volume-based muting to keep AudioStream pipeline intact
@@ -752,6 +776,32 @@ namespace Estuary
                 catch (Exception e)
                 {
                     Debug.LogException(e);
+                }
+            }
+
+            // Drain the queue FIRST so a new-message metadata unmute (NotifyAudioChunk) this frame
+            // disarms the safety-net before it can fire. If still muted after an interrupt and no
+            // metadata arrived within AutoUnmuteDelaySeconds, restore volume so the new response's
+            // first chunk isn't left silent. Runs on the main thread → Time is safe here.
+            if (_autoUnmutePending)
+            {
+                if (!_botAudioMuted)
+                {
+                    _autoUnmutePending = false;
+                    _autoUnmuteDeadline = 0f;
+                }
+                else
+                {
+                    float now = Time.realtimeSinceStartup;
+                    if (_autoUnmuteDeadline <= 0f)
+                    {
+                        _autoUnmuteDeadline = now + Mathf.Max(0f, AutoUnmuteDelaySeconds);
+                    }
+                    else if (now >= _autoUnmuteDeadline)
+                    {
+                        Log($"Auto-unmuting bot audio {AutoUnmuteDelaySeconds * 1000f:F0}ms after interrupt (new-message metadata not seen — preventing first-chunk clip)");
+                        MuteBotAudio(false); // clears _autoUnmutePending / _autoUnmuteDeadline
+                    }
                 }
             }
         }

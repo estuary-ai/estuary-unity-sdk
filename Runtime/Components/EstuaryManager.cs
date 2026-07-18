@@ -762,6 +762,8 @@ namespace Estuary
             if (_liveKitManager != null)
             {
                 _liveKitManager.DebugLogging = debugLogging;
+                if (config != null)
+                    _liveKitManager.AutoUnmuteDelaySeconds = config.BotAudioAutoUnmuteSeconds;
 
                 // Set this MonoBehaviour as the coroutine runner for LiveKit
                 _liveKitManager.SetCoroutineRunner(this);

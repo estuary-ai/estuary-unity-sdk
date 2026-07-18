@@ -49,6 +49,10 @@ namespace Estuary
         [Tooltip("Voice communication mode. LiveKit provides lower latency WebRTC streaming.")]
         private VoiceMode voiceMode = VoiceMode.LiveKit;
 
+        [SerializeField]
+        [Tooltip("LiveKit only: after an interrupt mutes the bot audio, auto-restore it this many milliseconds later if the next response's metadata hasn't arrived yet — prevents the first chunk being clipped. Tune per device: too low may bleed a little of the interrupted tail; too high re-introduces first-chunk clipping.")]
+        private float botAudioAutoUnmuteMs = 250f;
+
         [Header("Session Capabilities")]
         [SerializeField]
         [Tooltip("Declare that this device has a usable camera. When off, camera/vision tools are hidden from the character for the session.")]
@@ -107,6 +111,11 @@ namespace Estuary
         /// Whether LiveKit mode is enabled.
         /// </summary>
         public bool IsLiveKitEnabled => voiceMode == VoiceMode.LiveKit;
+
+        /// <summary>
+        /// LiveKit bot-audio auto-unmute safety-net window, in seconds (see field tooltip).
+        /// </summary>
+        public float BotAudioAutoUnmuteSeconds => Mathf.Max(0f, botAudioAutoUnmuteMs) / 1000f;
 
         /// <summary>
         /// Per-session device capability declaration sent in the auth payload.

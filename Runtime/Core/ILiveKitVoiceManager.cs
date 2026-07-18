@@ -141,6 +141,12 @@ namespace Estuary
         bool NotifyAudioChunk(string messageId, float timestamp = 0f);
 
         /// <summary>
+        /// Safety-net delay (seconds) to auto-restore bot audio after an interrupt mute when the
+        /// new response's metadata hasn't arrived yet — prevents the first chunk being clipped.
+        /// </summary>
+        float AutoUnmuteDelaySeconds { get; set; }
+
+        /// <summary>
         /// Process queued events on the main thread. Call this from Update().
         /// </summary>
         void ProcessMainThreadQueue();
