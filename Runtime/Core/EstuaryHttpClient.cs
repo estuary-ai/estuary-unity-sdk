@@ -37,8 +37,10 @@ namespace Estuary
         /// <summary>
         /// Gets the current auth token if a token provider is set.
         /// Returns null if no provider or if the provider fails.
+        /// Internal so sibling REST clients (EstuarySimulationApi) reuse the
+        /// exact same auth resolution instead of duplicating it.
         /// </summary>
-        private IEnumerator ResolveToken(Action<string> onToken)
+        internal IEnumerator ResolveToken(Action<string> onToken)
         {
             var tokenProvider = _config?.TokenProvider;
             if (tokenProvider == null)
@@ -65,7 +67,7 @@ namespace Estuary
         /// Applies auth header to a UnityWebRequest.
         /// Uses Bearer token if available, otherwise X-API-Key (only when no token provider is configured).
         /// </summary>
-        private void ApplyAuth(UnityWebRequest request, string token)
+        internal void ApplyAuth(UnityWebRequest request, string token)
         {
             if (!string.IsNullOrEmpty(token))
             {

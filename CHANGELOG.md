@@ -5,6 +5,17 @@ All notable changes to the Estuary Unity SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Character Simulation (v1)**: run the Estuary simulation on your own characters
+  - **EstuarySimulation**: component for streaming + triggering conversations on a world instance
+  - **EstuarySimulationApi**: coroutine REST client for `/api/v1/simulation/*` (worlds, instances, conversation triggers, events, lore, world view, transcripts)
+  - **EstuarySimulationStream**: live `/sim-v1` Socket.IO stream (messages, tool calls, lore, world-view updates)
+  - Simulation data models in `Estuary.Models` (`SimulationWorld`, `SimulationInstance`, `SimulationEvent`, `SimulationWorldView`, ...)
+  - **Session isolation** (contract v1.6): `Destroy World On End` inspector toggle + `EndWorld()` on `EstuarySimulation` delete the world server-side when the session ends — the next world starts fresh with no bleed-through memories; `ClearWorldMemories()` (component + `EstuarySimulationApi`) soft-resets a world by deleting every memory its simulation created while keeping the world, instances, lore, and transcripts
+
 ## [1.0.0] - 2024-12-16
 
 ### Added

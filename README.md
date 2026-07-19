@@ -20,6 +20,7 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 - **Device Capabilities**: Declare camera/mic/speaker availability per session so the character only offers tools the device supports
 - **World Model Integration**: Stream webcam video (LiveKit or WebSocket) for spatial awareness + scene-graph updates
 - **3D Character Models**: Download a character's Estuary-generated 3D model (GLB) and instantiate it as a GameObject at runtime (`EstuaryModelLoader`). Requires the optional glTFast importer.
+- **Character Simulation**: Build worlds of your characters, trigger character-to-character conversations, and stream them live — including the evolving per-instance world-view document (`EstuarySimulation`)
 
 ## Requirements
 
@@ -433,6 +434,92 @@ untextured preview) have a loadable model. To generate one first, call
 > **Note:** models load as **static meshes** (no glTF skeletal-animation playback yet). Drive
 > them with your own animator/behavior scripts, as the Vision Pro client does for its characters.
 
+## Character Simulation
+
+Run the Estuary character simulation on your own characters: group them into a
+**world** with seed relationships and lore, fork a per-player **instance**, then
+trigger character-to-character (pair or group) **conversations**. Immediate
+triggers stream live over the `/sim-v1` Socket.IO namespace; each completed
+conversation also updates the instance's **world view** — a living markdown
+document of what is going on in the world.
+
+> Simulation streaming requires an **API key** on your `EstuaryConfig` (REST
+> calls also work with a `TokenProvider`). Simulation LLM usage bills to your
+> monthly interaction quota.
+
+```csharp
+using Estuary;
+using Estuary.Models;
+using UnityEngine;
+
+public class SimulationExample : MonoBehaviour
+{
+    [SerializeField] private EstuarySimulation sim;   // EstuaryConfig assigned in Inspector
+
+    private void Start()
+    {
+        // 1. One-time setup: world + instance (persist the ids — instances survive restarts)
+        StartCoroutine(sim.Api.CreateWorld(
+            new SimulationWorldCreateRequest
+            {
+                Name = "Harbor Town",
+                Characters = new() {
+                    new SimulationCharacterSpec("character-uuid-1", "innkeeper"),
+                    new SimulationCharacterSpec("character-uuid-2", "fisherman"),
+                },
+                SeedLore = new() { "A storm wrecked the pier last winter." },
+            },
+            world => StartCoroutine(sim.Api.CreateInstance(
+                world.Id, "player-123",
+                instance =>
+                {
+                    // 2. Stream + trigger
+                    sim.OnSimulationMessage += m => Debug.Log($"{m.AgentName}: {m.Text}");
+                    sim.OnWorldViewUpdated += md => Debug.Log($"World view:\n{md}");
+                    sim.OnSimulationComplete += () => Debug.Log("Conversation finished");
+                    sim.ConnectStream(instance.Id);
+
+                    sim.TriggerConversation(
+                        "character-uuid-1", "character-uuid-2",
+                        intent: "Discuss rebuilding the pier before market day");
+                },
+                err => Debug.LogError(err))),
+            err => Debug.LogError(err)));
+    }
+}
+```
+
+Everything else on the API surface (`sim.Api`): `ListWorlds` / `GetWorld` /
+`UpdateWorld` / `DeleteWorld` / `ClearWorldMemories`, `AddCharacter` /
+`RemoveCharacter` / `UpsertRelationship`, `ListInstances` / `GetInstance` /
+`SetInstanceStatus` / `DeleteInstance`, `ListEvents` / `ListLore` /
+`GetWorldView` / `GetConversation`. All are coroutines with
+`onSuccess`/`onError` callbacks.
+
+Notes:
+
+- **Instances start paused.** Triggered conversations always work; activating an
+  instance (`SetInstanceStatus(id, "active")`) additionally opts in to
+  autonomous event generation (billable).
+- **Scheduled triggers don't stream.** Set `ScheduledAt` (UTC, ≤7 days out) on a
+  `SimulationConversationTrigger` to queue one for the engine, then poll
+  `ListEvents` — only immediate triggers stream over `/sim-v1`.
+- **World view**: fetch anytime with `sim.FetchWorldView(...)` (its `Markdown`
+  is `null` until the first conversation completes) or listen to
+  `OnWorldViewUpdated` for the rewritten document after each conversation.
+- The `EstuarySimulation` component targets one instance at a time; call
+  `ConnectStream(otherInstanceId)` to switch.
+- **Fresh sessions / memory isolation.** Lore, relationships, transcripts, and
+  the world view are per-instance, but memories characters save (the `remember`
+  tool) are keyed by `(character, playerId)` and deliberately shared with that
+  player's live chats — they would carry into a re-created world. To end a
+  session cleanly, set the component's **World Id** and enable
+  **Destroy World On End** in the inspector, then call `sim.EndWorld()` (also
+  fired best-effort if the component is destroyed at runtime): the world is
+  deleted server-side together with every memory its conversations created, so
+  the next world starts with no bleed-through. To keep the world but wipe its
+  memories, use `sim.ClearWorldMemories(...)` instead.
+
 ## Configuration Reference
 
 ### EstuaryConfig
@@ -568,6 +655,32 @@ Task ConnectLiveKitAsync()
 Task DisconnectLiveKitAsync()
 Task StartLiveKitPublishingAsync()
 Task StopLiveKitPublishingAsync()
+```
+
+### EstuarySimulation Methods
+
+```csharp
+// Live stream (/sim-v1) — one world instance at a time
+void ConnectStream(string instanceId = null)
+void DisconnectStream()
+
+// Conveniences (coroutines are started for you)
+Coroutine TriggerConversation(string sourceCharacterId, string targetCharacterId, string intent, ...)
+Coroutine TriggerGroupConversation(IList<string> participantIds, string intent, ...)
+Coroutine FetchWorldView(Action<SimulationWorldView> onSuccess, ...)
+Coroutine FetchLore(Action<SimulationLoreList> onSuccess, ...)
+Coroutine ClearWorldMemories(Action<SimulationWorldMemoriesCleared> onSuccess = null, ...)
+
+// World lifecycle — with the Destroy World On End toggle, ends the session by
+// deleting the world (and all memories it created) server-side
+void EndWorld(Action onDestroyed = null, Action<string> onError = null)
+
+// Full REST surface (run with StartCoroutine)
+EstuarySimulationApi Api { get; }
+
+// Events (C#): OnSimulationStarted, OnSimulationMessage, OnSimulationToolCall,
+//              OnSimulationLore, OnWorldViewUpdated, OnSimulationComplete,
+//              OnSimulationError, OnWorldDestroyed, OnStreamConnected/Disconnected/Error
 ```
 
 ## License
