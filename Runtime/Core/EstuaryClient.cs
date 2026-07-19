@@ -143,6 +143,14 @@ namespace Estuary
         public event EstuaryEvents.MemoryUpdatedHandler OnMemoryUpdated;
 
         /// <summary>
+        /// Fired when the extraction job evolves the character's private
+        /// motive for this (character, player) relationship (motive_updated,
+        /// contract v1.7). Arrives immediately before the accompanying
+        /// memory_updated.
+        /// </summary>
+        public event EstuaryEvents.MotiveUpdatedHandler OnMotiveUpdated;
+
+        /// <summary>
         /// Fired when the server rejects the connection because a policy cap was
         /// hit (e.g. the per-share-token concurrent-session limit). A disconnect
         /// follows immediately; the SDK suppresses auto-reconnect (same as
@@ -699,6 +707,7 @@ namespace Estuary
                 // Vision, memory, and session-policy event handlers
                 _socket.On("camera_capture", HandleCameraCaptureRequest);
                 _socket.On("memory_updated", HandleMemoryUpdated);
+                _socket.On("motive_updated", HandleMotiveUpdated);
                 _socket.On("session_rejected", HandleSessionRejected);
 
                 // Connect WITH auth - Socket.IO v4 passes auth in the namespace connect message
@@ -1243,6 +1252,25 @@ namespace Estuary
             catch (Exception e)
             {
                 LogError($"Failed to parse memory_updated: {e.Message}");
+            }
+        }
+
+        private void HandleMotiveUpdated(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return;
+            }
+
+            try
+            {
+                var data = MotiveUpdatedEvent.FromJson(json);
+                Log($"Received motive_updated: {data}");
+                DispatchToMainThread(() => OnMotiveUpdated?.Invoke(data));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse motive_updated: {e.Message}");
             }
         }
 

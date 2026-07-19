@@ -78,6 +78,13 @@ namespace Estuary
         /// <summary>The instance's world-view document was rewritten (full markdown).</summary>
         public event Action<string> OnWorldViewUpdated;
 
+        /// <summary>
+        /// A participant's private motive evolved (characterId, motive) — one
+        /// invocation per changed participant. Motives are private: injected
+        /// only into that character's own prompts. Contract v1.7.
+        /// </summary>
+        public event Action<string, string> OnMotiveUpdated;
+
         /// <summary>The conversation finished successfully.</summary>
         public event Action OnSimulationComplete;
 
@@ -304,6 +311,7 @@ namespace Estuary
             _stream.OnToolCall += HandleSimulationToolCall;
             _stream.OnLore += HandleSimulationLore;
             _stream.OnWorldView += HandleWorldView;
+            _stream.OnMotiveUpdated += HandleMotiveUpdated;
             _stream.OnComplete += HandleSimulationComplete;
             _stream.OnSimulationError += HandleSimulationError;
 
@@ -453,6 +461,9 @@ namespace Estuary
         private void HandleSimulationToolCall(SimulationToolCall call) => OnSimulationToolCall?.Invoke(call);
         private void HandleSimulationLore(string text) => OnSimulationLore?.Invoke(text);
         private void HandleWorldView(string markdown) => OnWorldViewUpdated?.Invoke(markdown);
+
+        private void HandleMotiveUpdated(string characterId, string motive) =>
+            OnMotiveUpdated?.Invoke(characterId, motive);
         private void HandleSimulationComplete() => OnSimulationComplete?.Invoke();
         private void HandleSimulationError(string error) => OnSimulationError?.Invoke(error);
 

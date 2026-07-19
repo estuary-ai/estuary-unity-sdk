@@ -57,6 +57,12 @@ namespace Estuary
         /// <summary>The instance's world-view document was rewritten (full markdown).</summary>
         public event Action<string> OnWorldView;
 
+        /// <summary>
+        /// A participant's private motive evolved (characterId, motive) —
+        /// one invocation per changed participant. Contract v1.7.
+        /// </summary>
+        public event Action<string, string> OnMotiveUpdated;
+
         /// <summary>The conversation finished successfully.</summary>
         public event Action OnComplete;
 
@@ -211,6 +217,9 @@ namespace Estuary
                 _socket.On("simulation_world_view", json =>
                     DispatchParsed<WorldViewPayload>(json, "simulation_world_view",
                         p => OnWorldView?.Invoke(p.markdown)));
+                _socket.On("simulation_motive_updated", json =>
+                    DispatchParsed<MotivePayload>(json, "simulation_motive_updated",
+                        p => OnMotiveUpdated?.Invoke(p.characterId, p.motive)));
                 _socket.On("simulation_complete", _ =>
                     _mainThreadQueue.Enqueue(() => OnComplete?.Invoke()));
                 _socket.On("simulation_error", json =>
@@ -291,6 +300,7 @@ namespace Estuary
         [Serializable] private class StartedPayload { public string eventId; }
         [Serializable] private class LorePayload { public string text; }
         [Serializable] private class WorldViewPayload { public string markdown; }
+        [Serializable] private class MotivePayload { public string characterId; public string motive; }
         [Serializable] private class ErrorPayload { public string error; }
 
         private void Log(string message)

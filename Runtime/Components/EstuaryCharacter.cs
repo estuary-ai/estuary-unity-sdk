@@ -95,6 +95,10 @@ namespace Estuary
         private MemoryUpdatedEventUnity onMemoryUpdated = new MemoryUpdatedEventUnity();
 
         [SerializeField]
+        [Tooltip("Fired when the character's private motive evolves for this (character, player) relationship")]
+        private MotiveUpdatedEventUnity onMotiveUpdated = new MotiveUpdatedEventUnity();
+
+        [SerializeField]
         [Tooltip("Fired when the server rejects the connection due to a policy cap (disconnect follows; no auto-reconnect)")]
         private SessionRejectedEvent onSessionRejected = new SessionRejectedEvent();
 
@@ -248,6 +252,13 @@ namespace Estuary
         /// conversation ends (memory_updated).
         /// </summary>
         public event Action<MemoryUpdatedEvent> OnMemoryUpdated;
+
+        /// <summary>
+        /// Fired when the extraction job evolves this character's private
+        /// motive for the current player relationship (motive_updated,
+        /// contract v1.7).
+        /// </summary>
+        public event Action<MotiveUpdatedEvent> OnMotiveUpdated;
 
         /// <summary>
         /// Fired when the server rejects the connection because a policy cap was
@@ -880,6 +891,14 @@ namespace Estuary
             onMemoryUpdated?.Invoke(data);
         }
 
+        internal void HandleMotiveUpdated(MotiveUpdatedEvent data)
+        {
+            Debug.Log($"[EstuaryCharacter] Motive updated: {data}");
+
+            OnMotiveUpdated?.Invoke(data);
+            onMotiveUpdated?.Invoke(data);
+        }
+
         internal void HandleSessionRejected(SessionRejectedData data)
         {
             Debug.LogWarning($"[EstuaryCharacter] Session rejected by server: {data}");
@@ -949,6 +968,9 @@ namespace Estuary
         // data model it carries.
         [Serializable]
         public class MemoryUpdatedEventUnity : UnityEvent<MemoryUpdatedEvent> { }
+
+        [Serializable]
+        public class MotiveUpdatedEventUnity : UnityEvent<MotiveUpdatedEvent> { }
 
         [Serializable]
         public class SessionRejectedEvent : UnityEvent<SessionRejectedData> { }

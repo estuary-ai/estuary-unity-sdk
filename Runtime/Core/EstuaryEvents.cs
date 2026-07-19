@@ -108,6 +108,13 @@ namespace Estuary
         /// </summary>
         public delegate void MemoryUpdatedHandler(MemoryUpdatedEvent data);
 
+        /// <summary>
+        /// Delegate for private-motive evolution push events (motive_updated,
+        /// contract v1.7). Fired when the extraction job evolves the
+        /// character's private motive for this (character, player) relationship.
+        /// </summary>
+        public delegate void MotiveUpdatedHandler(MotiveUpdatedEvent data);
+
         #region World Model Events
 
         /// <summary>

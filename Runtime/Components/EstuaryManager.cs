@@ -207,6 +207,13 @@ namespace Estuary
         public event EstuaryEvents.MemoryUpdatedHandler OnMemoryUpdated;
 
         /// <summary>
+        /// Fired when the extraction job evolves the character's private
+        /// motive for this (character, player) relationship (motive_updated,
+        /// contract v1.7).
+        /// </summary>
+        public event EstuaryEvents.MotiveUpdatedHandler OnMotiveUpdated;
+
+        /// <summary>
         /// Fired when the server rejects the connection because a policy cap was
         /// hit (e.g. the per-share-token concurrent-session limit). A disconnect
         /// follows; no layer of the SDK auto-reconnects.
@@ -750,6 +757,7 @@ namespace Estuary
             _client.OnVoiceTimeout += HandleVoiceTimeout;
             _client.OnCameraCaptureRequested += HandleCameraCaptureRequest;
             _client.OnMemoryUpdated += HandleMemoryUpdated;
+            _client.OnMotiveUpdated += HandleMotiveUpdated;
             _client.OnSessionRejected += HandleSessionRejected;
 
             // Subscribe to LiveKit client events
@@ -809,6 +817,7 @@ namespace Estuary
                 _client.OnVoiceTimeout -= HandleVoiceTimeout;
                 _client.OnCameraCaptureRequested -= HandleCameraCaptureRequest;
                 _client.OnMemoryUpdated -= HandleMemoryUpdated;
+                _client.OnMotiveUpdated -= HandleMotiveUpdated;
                 _client.OnSessionRejected -= HandleSessionRejected;
                 _client.OnLiveKitTokenReceived -= HandleLiveKitTokenReceived;
                 _client.OnLiveKitReady -= HandleLiveKitRoomReady;
@@ -1021,6 +1030,14 @@ namespace Estuary
 
             _activeCharacter?.HandleMemoryUpdated(data);
             OnMemoryUpdated?.Invoke(data);
+        }
+
+        private void HandleMotiveUpdated(MotiveUpdatedEvent data)
+        {
+            Log($"Motive updated: {data}");
+
+            _activeCharacter?.HandleMotiveUpdated(data);
+            OnMotiveUpdated?.Invoke(data);
         }
 
         private void HandleSessionRejected(SessionRejectedData data)

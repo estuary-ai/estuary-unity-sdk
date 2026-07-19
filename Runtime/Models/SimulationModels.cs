@@ -47,6 +47,13 @@ namespace Estuary.Models
         [JsonProperty("worldId")] public string WorldId;
         [JsonProperty("agentId")] public string AgentId;
         [JsonProperty("roleInWorld")] public string RoleInWorld;
+
+        /// <summary>
+        /// Seed motive (contract v1.7): the character's private inner drive.
+        /// Injected only into that character's own prompts; each instance
+        /// evolves its own live copy (see SimulationInstance.CharacterMotives).
+        /// </summary>
+        [JsonProperty("motive")] public string Motive;
     }
 
     /// <summary>
@@ -96,6 +103,14 @@ namespace Estuary.Models
 
         /// <summary>ISO timestamp of the last world-view rewrite; null until the first conversation completes.</summary>
         [JsonProperty("worldViewUpdatedAt")] public string WorldViewUpdatedAt;
+
+        /// <summary>
+        /// Live private motives for this run (contract v1.7): characterId →
+        /// motive. Seeded from the world's seed motives at instance creation,
+        /// evolved server-side after each conversation. Changed entries also
+        /// stream as simulation_motive_updated.
+        /// </summary>
+        [JsonProperty("characterMotives")] public Dictionary<string, string> CharacterMotives;
 
         [JsonProperty("createdAt")] public string CreatedAt;
         [JsonProperty("updatedAt")] public string UpdatedAt;
@@ -269,12 +284,19 @@ namespace Estuary.Models
         [JsonProperty("characterId")] public string CharacterId;
         [JsonProperty("roleInWorld")] public string RoleInWorld;
 
+        /// <summary>
+        /// Seed motive (contract v1.7, optional, ≤500 chars): the character's
+        /// private inner drive — evolves per instance server-side.
+        /// </summary>
+        [JsonProperty("motive")] public string Motive;
+
         public SimulationCharacterSpec() { }
 
-        public SimulationCharacterSpec(string characterId, string roleInWorld = null)
+        public SimulationCharacterSpec(string characterId, string roleInWorld = null, string motive = null)
         {
             CharacterId = characterId;
             RoleInWorld = roleInWorld;
+            Motive = motive;
         }
     }
 

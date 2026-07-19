@@ -13,6 +13,15 @@ namespace Estuary.Models
         [JsonProperty("tagline")] public string Tagline;
         [JsonProperty("personality")] public string Personality;
         [JsonProperty("background")] public string Background;
+
+        /// <summary>
+        /// Seed motive (contract v1.7): the character's private inner drive.
+        /// Only populated on owner-scoped v1 character reads — the legacy
+        /// /api/agents payload deliberately omits it (privacy), so expect null
+        /// from GetAgents.
+        /// </summary>
+        [JsonProperty("motive")] public string Motive;
+
         [JsonProperty("avatar")] public string Avatar;
         [JsonProperty("appearance")] public string Appearance;
         [JsonProperty("modelUrl")] public string ModelUrl;
