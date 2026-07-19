@@ -227,7 +227,7 @@ namespace Estuary
 
             using (var request = UnityWebRequest.Get(resolvedUrl))
             {
-                request.timeout = 60; // GLBs can be several MB on mobile networks
+                request.timeout = 120; // GLBs can be several MB on mobile networks
 
                 yield return request.SendWebRequest();
 
