@@ -50,7 +50,7 @@ namespace Estuary
         private VoiceMode voiceMode = VoiceMode.LiveKit;
 
         [SerializeField]
-        [Tooltip("LiveKit only: after an interrupt mutes the bot audio, auto-restore it this many milliseconds later if the next response's metadata hasn't arrived yet — prevents the first chunk being clipped. Tune per device: too low may bleed a little of the interrupted tail; too high re-introduces first-chunk clipping.")]
+        [Tooltip("LiveKit only: when the bot audio is interrupt-muted and a NEW turn is dispatched (final transcript / text / camera image send), auto-restore the audio this many milliseconds after that dispatch if the new response's metadata hasn't arrived yet — prevents the first chunk being clipped. An interrupt with no following turn stays muted (the interrupted tail never resumes on a timer). Too high re-introduces first-chunk clipping.")]
         private float botAudioAutoUnmuteMs = 250f;
 
         [Header("Session Capabilities")]

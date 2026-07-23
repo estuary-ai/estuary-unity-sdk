@@ -141,8 +141,19 @@ namespace Estuary
         bool NotifyAudioChunk(string messageId, float timestamp = 0f);
 
         /// <summary>
-        /// Safety-net delay (seconds) to auto-restore bot audio after an interrupt mute when the
-        /// new response's metadata hasn't arrived yet — prevents the first chunk being clipped.
+        /// Notify that a new outbound turn was dispatched (user final transcript, text,
+        /// say_line, or camera image send), so a new bot response is expected. Arms the
+        /// bounded auto-unmute safety net if the bot audio is interrupt-muted (or when
+        /// the interrupt mute lands after this call). Interrupts with no following turn
+        /// stay muted until the next response's metadata arrives.
+        /// </summary>
+        void NotifyResponseExpected();
+
+        /// <summary>
+        /// Safety-net delay (seconds) to auto-restore interrupt-muted bot audio, measured
+        /// from the new turn's dispatch (NotifyResponseExpected), when the new response's
+        /// metadata hasn't arrived yet — prevents the first chunk being clipped without
+        /// timed-resuming the interrupted tail.
         /// </summary>
         float AutoUnmuteDelaySeconds { get; set; }
 

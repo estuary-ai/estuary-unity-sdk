@@ -375,19 +375,27 @@ namespace Estuary
                 image = imageBase64,
                 mime_type = mimeType,
                 request_id = requestId,
-                text = text
+                text = text,
+                // The session's negotiated TTS sample rate (same value as the auth
+                // payload's audio_sample_rate). The gateway defaults an omitted
+                // sample_rate to 16000, which would give the VLM reply 16kHz TTS
+                // in (typically) a 48kHz session.
+                sample_rate = _audioSampleRate
             };
             await _socket.EmitAsync("camera_image", payload);
-            Log($"Sent camera image (mime={mimeType}, requestId={requestId ?? "none"}, base64Len={imageBase64.Length})");
+            Log($"Sent camera image (mime={mimeType}, requestId={requestId ?? "none"}, sampleRate={_audioSampleRate}, base64Len={imageBase64.Length})");
         }
 
         [Serializable]
         private class CameraImagePayload
         {
+            // Field names are the wire keys (JsonUtility serialization): snake_case
+            // per SDK_CONTRACT.md camera_image payload.
             public string image;
             public string mime_type;
             public string request_id;
             public string text;
+            public int sample_rate;
         }
 
         /// <summary>

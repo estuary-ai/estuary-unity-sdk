@@ -216,11 +216,16 @@ namespace Estuary
             var api = Api;
             if (api == null) return;
 
-            _worldDestroyRequested = true;
             var endedWorldId = worldId;
             StartCoroutine(api.DeleteWorld(endedWorldId,
                 () =>
                 {
+                    // Only a CONFIRMED delete suppresses the OnDestroy fallback. If this
+                    // component is destroyed while the DELETE is still in flight, the
+                    // coroutine dies with it (UnityWebRequest aborted, no callback), and
+                    // OnDestroy must still fire the best-effort raw request. A duplicate
+                    // DELETE when both go through is harmless — the second returns 404.
+                    _worldDestroyRequested = true;
                     if (config != null && config.DebugLogging)
                         Debug.Log($"[EstuarySimulation] World {endedWorldId} destroyed (memories purged).");
                     OnWorldDestroyed?.Invoke();
@@ -228,7 +233,7 @@ namespace Estuary
                 },
                 error =>
                 {
-                    _worldDestroyRequested = false;  // let OnDestroy retry best-effort
+                    // Flag was never set, so OnDestroy retries best-effort.
                     Debug.LogError($"[EstuarySimulation] World destroy failed: {error}");
                     onError?.Invoke(error);
                 }));

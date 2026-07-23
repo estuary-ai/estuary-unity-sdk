@@ -132,17 +132,20 @@ namespace Estuary
             if (_disposed) return;
             _clientDisconnect = true;
 
-            if (_socket != null)
+            var socket = _socket;  // local: Dispose() may null the field concurrently
+            if (socket != null)
             {
                 try
                 {
-                    await _socket.DisconnectAsync();
+                    await socket.DisconnectAsync();
                 }
                 catch (Exception e)
                 {
                     Log($"Error during disconnect: {e.Message}");
                 }
-                _socket = null;
+                // The connection is abandoned here — dispose it (WebSocket + receive
+                // loop CTS), don't just drop the reference.
+                DisposeSocket();
             }
             IsConnected = false;
         }
@@ -169,13 +172,7 @@ namespace Estuary
             _disposed = true;
             _clientDisconnect = true;
 
-            if (_socket != null)
-            {
-                _socket.OnConnected -= HandleConnected;
-                _socket.OnDisconnected -= HandleDisconnected;
-                _socket.OnError -= HandleError;
-                _socket = null;
-            }
+            DisposeSocket();
             IsConnected = false;
         }
 
@@ -192,8 +189,35 @@ namespace Estuary
             public string instanceId;
         }
 
+        /// <summary>
+        /// Unhook and dispose the current socket (WebSocket + receive-loop CTS).
+        /// Every path that abandons a connection must go through this — nulling
+        /// the reference alone leaks the underlying BuiltInSocketIOConnection.
+        /// </summary>
+        private void DisposeSocket()
+        {
+            var socket = _socket;
+            if (socket == null) return;
+            _socket = null;
+            socket.OnConnected -= HandleConnected;
+            socket.OnDisconnected -= HandleDisconnected;
+            socket.OnError -= HandleError;
+            try
+            {
+                socket.Dispose();
+            }
+            catch (Exception e)
+            {
+                Log($"Error disposing socket: {e.Message}");
+            }
+        }
+
         private async Task ConnectInternalAsync()
         {
+            // Each (re)connect creates a fresh connection — dispose the previous
+            // one first so reconnect attempts don't abandon live sockets.
+            DisposeSocket();
+
             try
             {
                 _socket = new BuiltInSocketIOConnection();
@@ -270,6 +294,12 @@ namespace Estuary
             if (_reconnectAttempts >= MAX_RECONNECT_ATTEMPTS)
             {
                 LogError("Max stream reconnect attempts reached");
+                // Terminal: surface it to listeners (EstuarySimulation forwards this as
+                // OnStreamError) so callers know the stream is gone for good and can
+                // fall back to REST polling or reconnect explicitly via ConnectAsync.
+                _mainThreadQueue.Enqueue(() => OnError?.Invoke(
+                    $"Stream closed: max reconnect attempts ({MAX_RECONNECT_ATTEMPTS}) reached. " +
+                    "Call ConnectAsync/ConnectStream to retry."));
                 return;
             }
 

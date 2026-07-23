@@ -119,13 +119,17 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Safety-net delay (seconds) for restoring bot audio after an interrupt mute.
-        /// The normal unmute happens when the new response's bot_voice metadata arrives
-        /// (<see cref="NotifyAudioChunk"/>). But the WebRTC audio can start playing before that
-        /// metadata is processed, leaving the first chunk muted. If no new-message metadata
-        /// arrives within this window, the bot audio is auto-unmuted anyway so the response
-        /// isn't clipped. Tune per device: too short may bleed a little of the interrupted
-        /// tail; too long re-introduces first-chunk clipping. Default 0.25s.
+        /// Safety-net delay (seconds) for restoring bot audio after an interrupt mute,
+        /// measured from the moment a new outbound turn is dispatched
+        /// (<see cref="NotifyResponseExpected"/> — user final transcript, text/say_line,
+        /// or camera image send). The normal unmute happens when the new response's
+        /// bot_voice metadata arrives (<see cref="NotifyAudioChunk"/>), but the WebRTC
+        /// audio can start playing before that metadata is processed, leaving the first
+        /// chunk muted; if no new-message metadata arrives within this window the audio
+        /// is auto-unmuted anyway so the response isn't clipped. The net is NOT armed by
+        /// the interrupt itself — an interrupt with no following turn keeps the source
+        /// muted until the next response's metadata, so the interrupted response's tail
+        /// never resumes on a timer. Default 0.25s.
         /// </summary>
         public float AutoUnmuteDelaySeconds { get; set; } = 0.25f;
 
@@ -148,11 +152,15 @@ namespace Estuary
         private string _interruptedMessageId;  // Message that was interrupted (to filter out)
         private float _lastInterruptTimestamp;  // Timestamp of last interrupt (to filter stale audio)
 
-        // Bounded safety-net unmute: armed when an interrupt mutes the bot audio, disarmed by any
-        // real unmute (metadata fast-path). Fixes the first-chunk-muted race where a new response's
-        // WebRTC audio plays before its bot_voice metadata is processed to restore volume.
+        // Bounded safety-net unmute: armed only while a NEW outbound response is expected
+        // (NotifyResponseExpected — turn dispatched) AND the bot audio is interrupt-muted;
+        // disarmed by any real unmute (metadata fast-path). Fixes the first-chunk-muted race
+        // where a new response's WebRTC audio plays before its bot_voice metadata is processed
+        // to restore volume — without timed-resuming the interrupted response's tail when no
+        // new turn follows the interrupt.
         private bool _autoUnmutePending;
         private float _autoUnmuteDeadline;  // Time.realtimeSinceStartup deadline; 0 = arm on next main-thread tick
+        private bool _responseExpected;  // a new turn is in flight; cleared when its metadata arrives
 
         private float _outputVolume = 1f;
         private bool _disposed;
@@ -646,11 +654,19 @@ namespace Estuary
             {
                 _botAudioMuted = muted;
 
-                // Arm the bounded safety-net on mute (interrupt); disarm on any real unmute.
+                // Arm the bounded safety-net on mute ONLY when a new outbound turn is already
+                // in flight (e.g. a text send raced ahead of the server's interrupt). A plain
+                // barge-in mute must NOT arm it — the next turn (NotifyResponseExpected) or the
+                // next response's metadata does — otherwise the timer would audibly resume the
+                // interrupted response's WebRTC tail. Disarm everything on any real unmute.
                 // Deadline is computed on the main thread in ProcessMainThreadQueue (Time is
                 // main-thread only, and MuteBotAudio may be called from an async interrupt path).
-                _autoUnmutePending = muted;
+                _autoUnmutePending = muted && _responseExpected;
                 _autoUnmuteDeadline = 0f;
+                if (!muted)
+                {
+                    _responseExpected = false;
+                }
 
                 bool success = false;
 
@@ -751,6 +767,10 @@ namespace Estuary
                 _currentMessageId = messageId;
                 Log($"Audio playback started for message {messageId}");
 
+                // The expected response has arrived — a later interrupt must not arm the
+                // auto-unmute safety net until another turn is dispatched.
+                _responseExpected = false;
+
                 // Unmute audio for new message (may have been muted during interrupt)
                 if (_botAudioMuted)
                 {
@@ -760,6 +780,29 @@ namespace Estuary
             }
 
             return true;  // Audio should be played
+        }
+
+        /// <summary>
+        /// Notify that a new outbound turn was just dispatched (user final transcript,
+        /// text/say_line, or camera image send), so a new bot response is expected.
+        /// If the bot audio is currently interrupt-muted, this arms the bounded
+        /// auto-unmute safety net (<see cref="AutoUnmuteDelaySeconds"/>) so the new
+        /// response's first WebRTC chunk isn't played muted if its bot_voice metadata
+        /// is late; if the interrupt arrives after this call (e.g. a text send raced
+        /// ahead of the server's interrupt), the net arms at the mute instead. Without
+        /// this call an interrupt keeps the audio muted until the next response's
+        /// metadata — the interrupted tail never resumes on a timer.
+        /// </summary>
+        public void NotifyResponseExpected()
+        {
+            _responseExpected = true;
+            if (_botAudioMuted)
+            {
+                // Interrupt-muted with a new turn now in flight: (re)arm the safety net.
+                // Deadline is computed on the next main-thread tick (Time is main-thread only).
+                _autoUnmutePending = true;
+                _autoUnmuteDeadline = 0f;
+            }
         }
 
         /// <summary>
@@ -780,9 +823,10 @@ namespace Estuary
             }
 
             // Drain the queue FIRST so a new-message metadata unmute (NotifyAudioChunk) this frame
-            // disarms the safety-net before it can fire. If still muted after an interrupt and no
-            // metadata arrived within AutoUnmuteDelaySeconds, restore volume so the new response's
-            // first chunk isn't left silent. Runs on the main thread → Time is safe here.
+            // disarms the safety-net before it can fire. The net only arms once a new turn is
+            // dispatched (NotifyResponseExpected) while interrupt-muted; if that turn's metadata
+            // hasn't arrived within AutoUnmuteDelaySeconds of the dispatch, restore volume so the
+            // new response's first chunk isn't left silent. Runs on the main thread → Time is safe.
             if (_autoUnmutePending)
             {
                 if (!_botAudioMuted)
@@ -799,7 +843,7 @@ namespace Estuary
                     }
                     else if (now >= _autoUnmuteDeadline)
                     {
-                        Log($"Auto-unmuting bot audio {AutoUnmuteDelaySeconds * 1000f:F0}ms after interrupt (new-message metadata not seen — preventing first-chunk clip)");
+                        Log($"Auto-unmuting bot audio {AutoUnmuteDelaySeconds * 1000f:F0}ms after new turn dispatch (new-message metadata not seen — preventing first-chunk clip)");
                         MuteBotAudio(false); // clears _autoUnmutePending / _autoUnmuteDeadline
                     }
                 }

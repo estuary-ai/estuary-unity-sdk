@@ -462,6 +462,7 @@ namespace Estuary
                 return;
             }
 
+            NotifyLiveKitResponseExpected();
             await _client.SendTextAsync(text);
         }
 
@@ -478,6 +479,7 @@ namespace Estuary
                 return;
             }
 
+            if (!textOnly) NotifyLiveKitResponseExpected();
             await _client.SendTextAsync(text, textOnly);
         }
 
@@ -493,6 +495,7 @@ namespace Estuary
                 Debug.LogError("[EstuaryManager] Cannot say line: not connected");
                 return;
             }
+            if (!textOnly) NotifyLiveKitResponseExpected();
             await _client.SayLineAsync(text, textOnly);
         }
 
@@ -556,6 +559,7 @@ namespace Estuary
                 return;
             }
 
+            NotifyLiveKitResponseExpected();  // VLM reply comes back with TTS
             await _client.SendCameraImageAsync(imageBase64, mimeType, requestId, text);
         }
 
@@ -846,6 +850,19 @@ namespace Estuary
             return $"{character.CharacterId}:{character.PlayerId}";
         }
 
+        /// <summary>
+        /// Tell the LiveKit voice manager a new outbound turn was dispatched (a bot
+        /// response with TTS is expected), so it can arm its bounded auto-unmute
+        /// safety net if the bot audio is interrupt-muted. No-op without LiveKit.
+        /// </summary>
+        private void NotifyLiveKitResponseExpected()
+        {
+            if (_liveKitManager != null && _liveKitManager.IsConnected)
+            {
+                _liveKitManager.NotifyResponseExpected();
+            }
+        }
+
         private bool ActiveCharacterWantsVoiceSession =>
             _activeCharacter != null && (_activeCharacter.AutoStartVoiceSession || _activeCharacter.IsVoiceSessionActive);
 
@@ -941,6 +958,15 @@ namespace Estuary
         private void HandleSttResponse(SttResponse response)
         {
             Log($"STT response: {response}");
+
+            // A final transcript means the server is dispatching a new turn. If the bot
+            // audio was muted by the barge-in interrupt, arm the LiveKit manager's bounded
+            // auto-unmute safety net now (first-chunk-muted race fix) — the interrupt
+            // itself no longer arms it, so the interrupted tail can't resume on a timer.
+            if (response != null && response.IsFinal && !string.IsNullOrEmpty(response.Text))
+            {
+                NotifyLiveKitResponseExpected();
+            }
 
             // Route to active character
             _activeCharacter?.HandleSttResponse(response);

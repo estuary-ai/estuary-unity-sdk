@@ -22,30 +22,48 @@ namespace Estuary
             }
 
             var import = new GltfImport();
-
-            // glTFast's generic Load handles GLB (binary) input; LoadGltfBinary is obsolete.
-            bool loaded = await import.Load(glb, null, null, cancellationToken);
-            if (!loaded)
+            GameObject root = null;
+            try
             {
-                Debug.LogError("[Estuary] GltfastModelLoader: failed to parse GLB.");
-                return null;
+                // glTFast's generic Load handles GLB (binary) input; LoadGltfBinary is obsolete.
+                bool loaded = await import.Load(glb, null, null, cancellationToken);
+                if (!loaded)
+                {
+                    Debug.LogError("[Estuary] GltfastModelLoader: failed to parse GLB.");
+                    import.Dispose();
+                    return null;
+                }
+
+                // Root the instantiated hierarchy under a named, zeroed container so
+                // callers get a single predictable transform to orient/scale/parent.
+                root = new GameObject("EstuaryCharacterModel");
+                if (parent != null)
+                    root.transform.SetParent(parent, worldPositionStays: false);
+
+                bool instantiated = await import.InstantiateMainSceneAsync(root.transform, cancellationToken);
+                if (!instantiated)
+                {
+                    Debug.LogError("[Estuary] GltfastModelLoader: failed to instantiate glTF scene.");
+                    Object.Destroy(root);
+                    import.Dispose();
+                    return null;
+                }
+
+                // Hand the import to a disposer on the root so its resources (meshes,
+                // textures, materials, buffers) are freed whenever the hierarchy is
+                // destroyed — model swap, scene unload, or app teardown.
+                root.AddComponent<GltfImportDisposer>().Attach(import);
+                return root;
             }
-
-            // Root the instantiated hierarchy under a named, zeroed container so
-            // callers get a single predictable transform to orient/scale/parent.
-            var root = new GameObject("EstuaryCharacterModel");
-            if (parent != null)
-                root.transform.SetParent(parent, worldPositionStays: false);
-
-            bool instantiated = await import.InstantiateMainSceneAsync(root.transform, cancellationToken);
-            if (!instantiated)
+            catch
             {
-                Debug.LogError("[Estuary] GltfastModelLoader: failed to instantiate glTF scene.");
-                Object.Destroy(root);
-                return null;
+                // Unexpected failure/cancellation mid-import: nothing owns the
+                // import yet, so free it (and any orphaned root) here.
+                if (root != null)
+                    Object.Destroy(root);
+                import.Dispose();
+                throw;
             }
-
-            return root;
         }
     }
 }
