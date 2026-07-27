@@ -40,6 +40,7 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 - interrupts: Implemented
 - audio_playback_tracking: Implemented
 - vision_camera: Implemented — full VLM round-trip. `SendCameraImage(imageBase64, mimeType, requestId?, text?)` (client → manager → character) emits `camera_image`; the server's proactive `camera_capture` request surfaces as `OnCameraCaptureRequested(CameraCaptureRequest)`. (Distinct from `EstuaryWebcam`, which streams continuous world-model video; this is the on-demand vision path. Added 2026-07-15 for parity with the TS/Python/Lens SDKs — the prior "Implemented" claim was stale, there was no code.)
+- client_action (contract v1.9): Implemented — typed in-world action delivery via native LLM function calling (SCRUM-202), replacing the legacy inline XML `<action .../>` tags that rode inside `bot_response` text. `EstuaryClient` handles `client_action` `{name, arguments, message_id, chunk_index, timestamp}` and fires `OnClientAction(ClientActionEvent)`; `EstuaryManager` routes to the active `EstuaryCharacter` (same chain as bot_response), which converts to the existing `AgentAction` model and fires the SAME public callbacks as the legacy parse path (`OnActionReceived` C# event + `onActionReceived` UnityEvent) — integrators and `EstuaryActionManager` see no API change. **Fire-on-arrival semantics** per the contract: the action triggers as soon as the event arrives, not synchronized to TTS playback position. Argument values are stringified into `AgentAction`'s string parameter dictionary (numbers invariant-culture, booleans lowercase "true"/"false") to match legacy XML-attribute behavior — integrators keep using the typed getters (`GetParameterInt/Float/Bool`). Payload parsing uses Newtonsoft (`ClientActionEvent.FromJson`) because the dynamic-keyed `arguments` map is beyond JsonUtility. The legacy text-tag parser (`ActionParser` in `EstuaryCharacter.HandleBotResponse`) is **retained but dormant** during the deprecation window — the server no longer instructs models to emit tags, so it only fires on stray tags; remove in a follow-up release per SDK_CONTRACT.md migration notes.
 - video_streaming_livekit: Implemented (requires LiveKit SDK)
 - video_streaming_websocket: Implemented (via WebcamVideoSource fallback)
 - scene_graph: Implemented
@@ -70,7 +71,7 @@ Runtime/
 |   +-- EstuaryWebcam        - Video streaming (LiveKit or WebSocket)
 |   +-- EstuaryModelLoader   - Downloads a character's GLB and instantiates it as a GameObject
 |   +-- EstuarySimulation    - Simulation v1: REST + /sim-v1 live stream for one world instance
-|   +-- EstuaryActionManager - Parses XML action tags from bot responses
+|   +-- EstuaryActionManager - Dispatches named action bindings (typed client_action events + dormant legacy XML tags)
 +-- Core/                # Low-level client logic (no LiveKit dependency)
 |   +-- EstuaryClient        - Socket.IO v4 client (manual protocol impl)
 |   +-- EstuaryConfig        - ScriptableObject configuration asset
@@ -129,6 +130,7 @@ OnVoiceTimeout(VoiceTimeoutData)      // Server voice-idle release; socket stays
 OnCameraCaptureRequested(CameraCaptureRequest) // Server asks for an image — respond with SendCameraImage(...)
 OnMemoryUpdated(MemoryUpdatedEvent)   // Newly extracted memories pushed after a conversation ends
 OnSessionRejected(SessionRejectedData) // Policy cap hit (e.g. concurrent-session limit); disconnect follows, no auto-reconnect
+OnClientAction(ClientActionEvent)     // Typed in-world action (contract v1.9); character layer re-fires it as OnActionReceived(AgentAction)
 ```
 
 Outbound methods added for parity: `SendCameraImage(imageBase64, mimeType, requestId?, text?)` on

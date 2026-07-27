@@ -158,6 +158,13 @@ namespace Estuary
         /// </summary>
         public event EstuaryEvents.SessionRejectedHandler OnSessionRejected;
 
+        /// <summary>
+        /// Fired when the server pushes a typed in-world action (client_action,
+        /// contract v1.9). Fire-on-arrival: trigger the action as soon as the
+        /// event arrives — actions are not synchronized to TTS playback.
+        /// </summary>
+        public event EstuaryEvents.ClientActionHandler OnClientAction;
+
         #endregion
 
         #region Properties
@@ -712,10 +719,11 @@ namespace Estuary
                 _socket.On("scene_graph_update", HandleSceneGraphUpdate);
                 _socket.On("room_identified", HandleRoomIdentified);
 
-                // Vision, memory, and session-policy event handlers
+                // Vision, memory, action, and session-policy event handlers
                 _socket.On("camera_capture", HandleCameraCaptureRequest);
                 _socket.On("memory_updated", HandleMemoryUpdated);
                 _socket.On("motive_updated", HandleMotiveUpdated);
+                _socket.On("client_action", HandleClientAction);
                 _socket.On("session_rejected", HandleSessionRejected);
 
                 // Connect WITH auth - Socket.IO v4 passes auth in the namespace connect message
@@ -1279,6 +1287,25 @@ namespace Estuary
             catch (Exception e)
             {
                 LogError($"Failed to parse motive_updated: {e.Message}");
+            }
+        }
+
+        private void HandleClientAction(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return;
+            }
+
+            try
+            {
+                var data = ClientActionEvent.FromJson(json);
+                Log($"Received client_action: {data}");
+                DispatchToMainThread(() => OnClientAction?.Invoke(data));
+            }
+            catch (Exception e)
+            {
+                LogError($"Failed to parse client_action: {e.Message}");
             }
         }
 

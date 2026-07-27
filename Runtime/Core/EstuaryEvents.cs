@@ -66,6 +66,13 @@ namespace Estuary
         public delegate void ActionReceivedHandler(AgentAction action);
 
         /// <summary>
+        /// Delegate for typed in-world action events (client_action, contract
+        /// v1.9). Fire-on-arrival: trigger the action as soon as the event
+        /// arrives. Replaces the legacy XML tags parsed from bot_response text.
+        /// </summary>
+        public delegate void ClientActionHandler(ClientActionEvent data);
+
+        /// <summary>
         /// Delegate for quota exceeded events.
         /// Fired when the API key owner has exceeded their monthly interaction quota.
         /// </summary>

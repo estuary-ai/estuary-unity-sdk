@@ -75,7 +75,7 @@ namespace Estuary
         private ErrorEvent onError = new ErrorEvent();
 
         [SerializeField]
-        [Tooltip("Fired when an action is parsed from a bot response")]
+        [Tooltip("Fired when the character performs an in-world action (typed client_action event, or a legacy tag parsed from bot response text)")]
         private ActionReceivedEvent onActionReceived = new ActionReceivedEvent();
 
         [SerializeField]
@@ -219,8 +219,10 @@ namespace Estuary
         public event Action<ConnectionState> OnConnectionStateChanged;
 
         /// <summary>
-        /// Fired when an action is parsed from a bot response.
-        /// Actions are embedded using XML-style tags: &lt;action name="sit" /&gt;
+        /// Fired when the character performs an in-world action. Actions arrive
+        /// as typed client_action events (contract v1.9); legacy XML-style
+        /// &lt;action name="sit" /&gt; tags in bot response text also fire this
+        /// (dormant path — the server no longer instructs models to emit tags).
         /// </summary>
         public event Action<AgentAction> OnActionReceived;
 
@@ -897,6 +899,19 @@ namespace Estuary
 
             OnMotiveUpdated?.Invoke(data);
             onMotiveUpdated?.Invoke(data);
+        }
+
+        internal void HandleClientAction(ClientActionEvent data)
+        {
+            // Typed action delivery (client_action, contract v1.9) — replaces
+            // the legacy XML <action .../> tags parsed out of bot_response
+            // text. Fires the SAME action callbacks as the legacy parse path,
+            // so integrators (e.g. EstuaryActionManager) see no API change.
+            // Fire-on-arrival: not synchronized to TTS playback.
+            var action = data.ToAgentAction();
+            Debug.Log($"[EstuaryCharacter] Action received: {action}");
+            OnActionReceived?.Invoke(action);
+            onActionReceived?.Invoke(action);
         }
 
         internal void HandleSessionRejected(SessionRejectedData data)

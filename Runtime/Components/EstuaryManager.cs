@@ -762,6 +762,7 @@ namespace Estuary
             _client.OnCameraCaptureRequested += HandleCameraCaptureRequest;
             _client.OnMemoryUpdated += HandleMemoryUpdated;
             _client.OnMotiveUpdated += HandleMotiveUpdated;
+            _client.OnClientAction += HandleClientAction;
             _client.OnSessionRejected += HandleSessionRejected;
 
             // Subscribe to LiveKit client events
@@ -822,6 +823,7 @@ namespace Estuary
                 _client.OnCameraCaptureRequested -= HandleCameraCaptureRequest;
                 _client.OnMemoryUpdated -= HandleMemoryUpdated;
                 _client.OnMotiveUpdated -= HandleMotiveUpdated;
+                _client.OnClientAction -= HandleClientAction;
                 _client.OnSessionRejected -= HandleSessionRejected;
                 _client.OnLiveKitTokenReceived -= HandleLiveKitTokenReceived;
                 _client.OnLiveKitReady -= HandleLiveKitRoomReady;
@@ -1064,6 +1066,15 @@ namespace Estuary
 
             _activeCharacter?.HandleMotiveUpdated(data);
             OnMotiveUpdated?.Invoke(data);
+        }
+
+        private void HandleClientAction(ClientActionEvent data)
+        {
+            Log($"Client action: {data}");
+
+            // Route to active character (same chain as bot_response — the
+            // character fires the public action callbacks).
+            _activeCharacter?.HandleClientAction(data);
         }
 
         private void HandleSessionRejected(SessionRejectedData data)
