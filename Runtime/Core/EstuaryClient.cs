@@ -738,8 +738,10 @@ namespace Estuary
                     // serialize a null nested object as all-false, which would
                     // wrongly disable every device tool; a default instance is all
                     // true, identical to the server's omit-default (see
-                    // SessionCapabilities).
-                    capabilities = _capabilities ?? new SessionCapabilities(),
+                    // SessionCapabilities). BuildCapabilitiesPayload also forces
+                    // client_action true so an integrator-supplied instance can't
+                    // drop the session onto the retired XML tag path.
+                    capabilities = BuildCapabilitiesPayload(),
                     enable_animation = _enableAnimation
                 };
                 await _socket.ConnectAsync(_serverUrl, SDK_NAMESPACE, auth);
@@ -754,11 +756,33 @@ namespace Estuary
             }
         }
 
+        /// <summary>
+        /// Build the outbound capabilities object: the integrator's device
+        /// declaration (or an all-true default) with the protocol capabilities
+        /// this build actually implements forced on.
+        ///
+        /// client_action is forced rather than merely defaulted because it is a
+        /// statement about the SDK, not the app. The server treats its absence as
+        /// "legacy client" and falls back to the retired XML &lt;action&gt; tag path
+        /// (SDK_CONTRACT v1.10), where this build's dormant ActionParser is the
+        /// only thing that would catch an action. Copies rather than mutating, so
+        /// an integrator's shared SessionCapabilities instance is left alone.
+        /// </summary>
+        private SessionCapabilities BuildCapabilitiesPayload()
+        {
+            var source = _capabilities ?? new SessionCapabilities();
+            return new SessionCapabilities(source.camera, source.microphone, source.speaker)
+            {
+                version = source.version,
+                client_action = true,
+            };
+        }
+
         private ISocketIOConnection CreateSocketConnection()
         {
             // In production, replace this with actual SocketIOClient:
             // return new SocketIOClientWrapper();
-            
+
             // For now, use the built-in WebSocket implementation
             return new BuiltInSocketIOConnection();
         }
