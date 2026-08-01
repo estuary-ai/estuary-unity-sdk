@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Events;
@@ -173,6 +174,20 @@ namespace Estuary
         // character layer would re-auth and resurrect billing in a loop even
         // though the socket layer behaved. Cleared on explicit Connect().
         private bool _serverEndedSession;
+
+        // Legacy XML <action> tag path only: actions already fired this turn.
+        // HandleBotResponse re-parses EVERY bot_response chunk, and the final
+        // chunk carries the whole cumulative text — so any tag that also landed
+        // intact inside a streamed chunk gets parsed twice and fired twice.
+        // Today's token-level chunking splits tags across chunks so this rarely
+        // bites, but that is luck (chunk granularity), not a guarantee: sentence
+        // chunking or a model emitting a tag in one burst brings it straight
+        // back. Keyed and scoped exactly like the server's own per-turn guard
+        // (worker/processor.py fired_client_actions): name + sorted parameters,
+        // cleared whenever the message id changes. The typed client_action path
+        // needs none of this — the server guarantees exactly-once there.
+        private readonly HashSet<string> _firedLegacyActions = new HashSet<string>();
+        private string _firedLegacyActionsMessageId;
 
         #endregion
 
@@ -710,10 +725,15 @@ namespace Estuary
             if (!string.IsNullOrEmpty(responseText) && ActionParser.ContainsActions(responseText))
             {
                 var actions = ActionParser.ParseActions(responseText);
-                
-                // Fire action events for each parsed action
+
+                // Fire action events for each parsed action, once per turn.
                 foreach (var action in actions)
                 {
+                    if (!TryMarkLegacyActionFired(action, CurrentMessageId))
+                    {
+                        continue;
+                    }
+
                     Debug.Log($"[EstuaryCharacter] Action received: {action}");
                     OnActionReceived?.Invoke(action);
                     onActionReceived?.Invoke(action);
@@ -741,6 +761,72 @@ namespace Estuary
             // Invoke events with the (possibly modified) response
             OnBotResponse?.Invoke(response);
             onBotResponse?.Invoke(response);
+        }
+
+        /// <summary>
+        /// Claim an action for a turn, returning false if an identical one was
+        /// already claimed for that message id.
+        ///
+        /// Mirrors the server's per-turn guard (worker/processor.py
+        /// fired_client_actions): the key is the action name plus its parameters
+        /// in sorted order, so two genuinely different actions in one turn both
+        /// fire while a re-parse of the same tag does not. Two byte-identical
+        /// tags in one turn therefore collapse to one — matching the server's
+        /// behavior on the typed path, and the desirable reading of a model that
+        /// emitted the same tag twice.
+        ///
+        /// BOTH delivery paths claim into this one set, but they use the result
+        /// differently. The legacy tag path obeys it. The typed path claims and
+        /// then fires regardless, because the server already guarantees
+        /// exactly-once there and it is authoritative; its claim exists purely so
+        /// that a stray &lt;action&gt; tag left in the same turn's text cannot
+        /// replay an action the client has already performed.
+        /// </summary>
+        /// <param name="action">The action being delivered.</param>
+        /// <param name="messageId">
+        /// Turn the claim belongs to. The typed path must pass the event's own
+        /// message id rather than <see cref="CurrentMessageId"/>: a client_action
+        /// can arrive before this turn's first bot_response, so CurrentMessageId
+        /// may still name the PREVIOUS turn, and the claim would be filed in the
+        /// wrong bucket and then cleared the moment the real id arrived.
+        /// </param>
+        private bool TryMarkLegacyActionFired(AgentAction action, string messageId)
+        {
+            if (action == null)
+            {
+                return false;
+            }
+
+            // A new turn resets the guard. Null/empty ids (older servers, or
+            // synthesized responses) share one bucket, which is still safer than
+            // no dedup at all.
+            messageId = messageId ?? string.Empty;
+            if (_firedLegacyActionsMessageId != messageId)
+            {
+                _firedLegacyActionsMessageId = messageId;
+                _firedLegacyActions.Clear();
+            }
+
+            var key = new System.Text.StringBuilder(action.Name ?? string.Empty);
+            if (action.Parameters != null && action.Parameters.Count > 0)
+            {
+                var names = new List<string>(action.Parameters.Keys);
+                names.Sort(System.StringComparer.Ordinal);
+                foreach (var p in names)
+                {
+                    key.Append('\u001F').Append(p).Append('=').Append(action.Parameters[p]);
+                }
+            }
+
+            if (!_firedLegacyActions.Add(key.ToString()))
+            {
+                Debug.Log(
+                    $"[EstuaryCharacter] Suppressing duplicate legacy action '{action.Name}' " +
+                    "(already fired this turn)");
+                return false;
+            }
+
+            return true;
         }
 
         internal void HandleBotVoice(BotVoice voice)
@@ -903,12 +989,20 @@ namespace Estuary
 
         internal void HandleClientAction(ClientActionEvent data)
         {
-            // Typed action delivery (client_action, contract v1.9) — replaces
+            // Typed action delivery (client_action, contract v1.10) — supersedes
             // the legacy XML <action .../> tags parsed out of bot_response
             // text. Fires the SAME action callbacks as the legacy parse path,
             // so integrators (e.g. EstuaryActionManager) see no API change.
             // Fire-on-arrival: not synchronized to TTS playback.
             var action = data.ToAgentAction();
+
+            // Claim it against this turn so the dormant tag parser can't replay
+            // the same action if a stray <action/> tag survives in the reply
+            // text. The claim's result is deliberately ignored: the server
+            // guarantees exactly-once here and is authoritative, so a typed
+            // event always fires.
+            TryMarkLegacyActionFired(action, data.MessageId);
+
             Debug.Log($"[EstuaryCharacter] Action received: {action}");
             OnActionReceived?.Invoke(action);
             onActionReceived?.Invoke(action);
