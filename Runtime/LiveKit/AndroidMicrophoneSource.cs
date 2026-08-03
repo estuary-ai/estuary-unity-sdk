@@ -107,7 +107,7 @@ namespace Estuary
         /// <param name="coroutineRunner">MonoBehaviour to run the polling coroutine on</param>
         /// <param name="audioSource">The Android audio source type to use</param>
         public AndroidMicrophoneSource(MonoBehaviour coroutineRunner, AndroidAudioSource audioSource = AndroidAudioSource.VoiceRecognition)
-            : base(2, RtcAudioSourceType.AudioSourceMicrophone) // Output stereo for LiveKit
+            : base(RtcAudioSourceType.AudioSourceMicrophone, SAMPLE_RATE, 2) // Output stereo for LiveKit
         {
             _coroutineRunner = coroutineRunner;
             _audioSource = audioSource;

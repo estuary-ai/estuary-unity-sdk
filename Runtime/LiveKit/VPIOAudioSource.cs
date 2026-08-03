@@ -27,16 +27,14 @@ namespace Estuary
         // Max samples per poll: ~60ms at 48kHz = 2880 samples (headroom for native rate)
         private const int MAX_SAMPLES_PER_POLL = 2880;
 
-        // Actual sample rate — set dynamically after VPIO starts
-        private int _sampleRate = 48000;
+        // The base constructor fixes the native source format, and it runs before VPIO has
+        // started and can report its real rate. Declare the iOS default here; Start() re-reads
+        // the true rate and every captured frame carries it, so a device that negotiates a
+        // different rate still streams correctly.
+        private const int DEFAULT_SAMPLE_RATE = 48000;
 
-        static VPIOAudioSource()
-        {
-            // Must be set before RtcAudioSource base constructor runs —
-            // it reads DefaultMicrophoneSampleRate at construction time.
-            RtcAudioSource.DefaultMicrophoneSampleRate = 48000;
-            RtcAudioSource.DefaultChannels = CHANNELS;
-        }
+        // Actual sample rate — set dynamically after VPIO starts
+        private int _sampleRate = DEFAULT_SAMPLE_RATE;
 
 #if UNITY_IOS && !UNITY_EDITOR
         [DllImport("__Internal")]
@@ -113,7 +111,7 @@ namespace Estuary
         /// </summary>
         /// <param name="coroutineRunner">MonoBehaviour to run the polling coroutine on</param>
         public VPIOAudioSource(MonoBehaviour coroutineRunner)
-            : base(CHANNELS, RtcAudioSourceType.AudioSourceMicrophone)
+            : base(RtcAudioSourceType.AudioSourceMicrophone, DEFAULT_SAMPLE_RATE, CHANNELS)
         {
             _coroutineRunner = coroutineRunner;
             _pollBuffer = new float[MAX_SAMPLES_PER_POLL];
@@ -175,11 +173,15 @@ namespace Estuary
                 return;
             }
 
-            // Query the actual sample rate from native VPIO
+            // Query the actual sample rate from native VPIO. Each AudioRead frame carries this
+            // rate to LiveKit, so capture is correct even when it differs from the declared
+            // DEFAULT_SAMPLE_RATE — the cost of a mismatch is a per-frame warning from the base class.
             _sampleRate = EstuaryVPIO_GetSampleRate();
-            RtcAudioSource.DefaultMicrophoneSampleRate = (uint)_sampleRate;
-            RtcAudioSource.DefaultChannels = CHANNELS;
-            Debug.Log($"[VPIOAudioSource] Configured LiveKit defaults: {_sampleRate}Hz, {CHANNELS} channel(s)");
+            if (_sampleRate != DEFAULT_SAMPLE_RATE)
+            {
+                Debug.LogWarning($"[VPIOAudioSource] VPIO negotiated {_sampleRate}Hz but the LiveKit source was declared at {DEFAULT_SAMPLE_RATE}Hz");
+            }
+            Debug.Log($"[VPIOAudioSource] Capturing at {_sampleRate}Hz, {CHANNELS} channel(s)");
 
             _started = true;
 

@@ -25,15 +25,6 @@ namespace Estuary
         private const int CHANNELS = 1; // Mono for voice (industry standard for conversational AI)
         private const float POLL_INTERVAL_MS = 20f; // Poll every 20ms for low latency
         
-        // Static constructor to configure LiveKit's default sample rate BEFORE any instance is created
-        static DirectMicrophoneSource()
-        {
-            // Override LiveKit's default (48000) to match our target sample rate
-            RtcAudioSource.DefaultMicrophoneSampleRate = SAMPLE_RATE;
-            RtcAudioSource.DefaultChannels = CHANNELS;
-            UnityEngine.Debug.Log($"[DirectMicrophoneSource] Configured LiveKit defaults: {SAMPLE_RATE}Hz, {CHANNELS} channel(s)");
-        }
-        
         private readonly string _deviceName;
         private readonly MonoBehaviour _coroutineRunner;
         
@@ -102,7 +93,7 @@ namespace Estuary
         /// <param name="deviceName">Microphone device name (null for default)</param>
         /// <param name="coroutineRunner">MonoBehaviour to run the polling coroutine on</param>
         public DirectMicrophoneSource(string deviceName, MonoBehaviour coroutineRunner) 
-            : base(CHANNELS, RtcAudioSourceType.AudioSourceMicrophone)
+            : base(RtcAudioSourceType.AudioSourceMicrophone, SAMPLE_RATE, CHANNELS)
         {
             _deviceName = deviceName;
             _coroutineRunner = coroutineRunner;
