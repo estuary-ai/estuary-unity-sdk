@@ -551,10 +551,12 @@ namespace Estuary
         /// Push-to-talk press signal (contract v1.11). Emits client_interrupt
         /// (a press means "I'm talking now" — stop any in-flight bot speech)
         /// then start_voice carrying turn_mode: push_to_talk. Deliberately NOT
-        /// gated on _isVoiceModeActive: presses are per-turn signals, and on
-        /// LiveKit PTT sessions voice_started never fires (the session-start
-        /// start_voice is suppressed), so the session guard would swallow
-        /// every press.
+        /// gated on _isVoiceModeActive: on LiveKit+PTT every press's
+        /// start_voice replies voice_started {"already_active": true} once a
+        /// session is active, which HandleVoiceStarted turns into
+        /// _isVoiceModeActive = true — so the flag is false before the first
+        /// press and true after it. A guard would swallow either the first
+        /// press (flag still false) or every later one (flag already true).
         /// </summary>
         public async Task NotifyPushToTalkPressedAsync()
         {

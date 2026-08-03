@@ -398,7 +398,9 @@ namespace Estuary
 
             _pttHeld = true;
 
-            // Signal first so the press reaches the server before audio frames.
+            // Signal first (best-effort ordering only: the signal rides
+            // Socket.IO and audio rides WebRTC — different transports, so
+            // there's no strict guarantee the press lands before frames).
             if (EstuaryManager.HasInstance)
             {
                 _ = EstuaryManager.Instance.NotifyPushToTalkPressedAsync();

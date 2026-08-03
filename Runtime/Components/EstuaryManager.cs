@@ -1208,8 +1208,20 @@ namespace Estuary
                 tasks.Add(_client.NotifyLiveKitJoinedAsync());
             }
 
-            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession)
+            bool isLiveKitPtt = _client != null && _client.SessionTurnMode == TurnMode.PushToTalk;
+
+            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession && !isLiveKitPtt)
             {
+                // Skip the eager pipelined publish on LiveKit+PTT: it only
+                // serves time-to-first-audio, which is irrelevant before a
+                // press, and calling StartPublishingAsync directly here
+                // bypasses EstuaryMicrophone.StartLiveKitRecording's own
+                // publish-then-mute — leaving the track hot from bot-subscribe
+                // until the mic's mute lands (after livekit_ready ->
+                // OnLiveKitReadyForVoice -> StartRecording). The mic's own
+                // path already publishes+mutes at livekit_ready, and
+                // Unmute() falls back to StartPublishingAsync on the first
+                // press if publishing hasn't started yet.
                 tasks.Add(StartLiveKitPublishingAsync());
             }
 

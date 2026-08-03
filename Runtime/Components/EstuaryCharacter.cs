@@ -911,9 +911,12 @@ namespace Estuary
 
             // The socket stays open and text keeps working — do NOT touch
             // _serverEndedSession (no disconnect follows). The server already
-            // closed STT and deleted the room, so only local cleanup here; no
-            // stop_voice is sent. Resume = StartVoiceSession() on user intent
-            // (auto-mute illusion UX).
+            // closed STT and deleted the room; ReleaseLocalVoiceState() below
+            // is local cleanup. Exception: if PTT was mid-hold,
+            // microphone.StopRecording() sends a release-signal stop_voice
+            // (contract v1.11's mid-hold-teardown guarantee) — harmless here,
+            // the server just answers voice_stopped {already_stopped}. Resume
+            // = StartVoiceSession() on user intent (auto-mute illusion UX).
             ReleaseLocalVoiceState();
 
             // Invoke events
