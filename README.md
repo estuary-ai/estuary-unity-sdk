@@ -26,7 +26,7 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 
 - Unity 2021.3 LTS or newer
 - .NET Standard 2.1 or .NET 4.x
-- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v1.3.3+
+- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v2.0.0+
 
 ## Installation
 
@@ -39,7 +39,7 @@ Unity Package Manager does not resolve transitive Git URL dependencies, so you m
 3. Select `Add package from git URL...`
 4. Add the **LiveKit SDK** first:
    ```
-   https://github.com/livekit/client-sdk-unity.git#v1.3.3
+   https://github.com/livekit/client-sdk-unity.git#v2.0.0
    ```
 5. Click `+` > `Add package from git URL...` again
 6. Add the **Estuary SDK**:
