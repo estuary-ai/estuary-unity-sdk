@@ -207,6 +207,16 @@ namespace Estuary
         /// </summary>
         public bool IsVoiceModeActive => _isVoiceModeActive;
 
+        /// <summary>
+        /// Turn-taking mode declared to the server (SDK_CONTRACT v1.11). Set
+        /// before starting voice. PushToTalk rides on livekit_token /
+        /// livekit_join / start_voice as {"turn_mode":"push_to_talk"};
+        /// Continuous keeps the legacy null payloads (wire-identical to
+        /// pre-v1.11 builds). Deliberately persists across auto-reconnects so
+        /// the new server session is re-declared.
+        /// </summary>
+        public TurnMode SessionTurnMode { get; set; } = TurnMode.Continuous;
+
         #endregion
 
         #region Private Fields
@@ -488,7 +498,7 @@ namespace Estuary
             }
 
             Log("Requesting LiveKit token...");
-            await _socket.EmitAsync("livekit_token", null);
+            await _socket.EmitAsync("livekit_token", BuildTurnModePayload());
         }
 
         /// <summary>
@@ -511,7 +521,7 @@ namespace Estuary
             }
 
             Log("Starting voice mode...");
-            await _socket.EmitAsync("start_voice", null);
+            await _socket.EmitAsync("start_voice", BuildTurnModePayload());
         }
 
         /// <summary>
@@ -550,7 +560,7 @@ namespace Estuary
             }
 
             Log("Notifying server of LiveKit join...");
-            await _socket.EmitAsync("livekit_join", null);
+            await _socket.EmitAsync("livekit_join", BuildTurnModePayload());
         }
 
         /// <summary>
@@ -791,6 +801,14 @@ namespace Estuary
             };
         }
 
+        /// <summary>
+        /// The v1.11 turn_mode declaration, or null in continuous mode —
+        /// JsonUtility cannot omit fields, so continuous sessions must emit the
+        /// JSON literal null to stay wire-identical to pre-v1.11 builds.
+        /// </summary>
+        private object BuildTurnModePayload() =>
+            SessionTurnMode == TurnMode.PushToTalk ? (object)new TurnModePayload() : null;
+
         private ISocketIOConnection CreateSocketConnection()
         {
             // In production, replace this with actual SocketIOClient:
@@ -829,7 +847,16 @@ namespace Estuary
             public SessionCapabilities capabilities;  // per-session device capability declaration
             public bool enable_animation;  // opt in to bot_animation blendshape frames
         }
-        
+
+        // Internal (not private, unlike sibling payloads) so wire-emission
+        // tests can assert the typed payload via InternalsVisibleTo. The field
+        // name is the wire key (JsonUtility).
+        [Serializable]
+        internal class TurnModePayload
+        {
+            public string turn_mode = "push_to_talk";
+        }
+
         [Serializable]
         private class TextPayload
         {

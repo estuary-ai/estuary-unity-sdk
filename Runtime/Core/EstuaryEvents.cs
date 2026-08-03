@@ -272,6 +272,24 @@ namespace Estuary
         /// </summary>
         Error
     }
+
+    /// <summary>
+    /// Turn-taking mode for a voice session (SDK_CONTRACT v1.11 turn_mode).
+    /// Declared to the server on livekit_token / livekit_join / start_voice.
+    /// </summary>
+    public enum TurnMode
+    {
+        /// <summary>Legacy behavior: server VAD / semantic endpointing dispatches turns.</summary>
+        Continuous,
+
+        /// <summary>
+        /// Server holds end-of-turn dispatch while the talk button is held
+        /// (start_voice = press, stop_voice = release; mid-hold STT finals are
+        /// buffered and re-emitted as interims instead of answering over the
+        /// held button).
+        /// </summary>
+        PushToTalk
+    }
 }
 
 
