@@ -583,6 +583,47 @@ namespace Estuary
         #region Voice Mode Methods
 
         /// <summary>
+        /// Mirror the active character's mic PTT mode onto the client BEFORE any
+        /// declaration point (livekit_token / livekit_join / start_voice) — the
+        /// v1.11 turn_mode declaration is one-way and lasts for the session.
+        /// </summary>
+        private void SyncTurnModeFromActiveCharacter()
+        {
+            if (_client == null)
+                return;
+
+            var mic = _activeCharacter != null ? _activeCharacter.Microphone : null;
+            _client.SessionTurnMode = mic != null && mic.IsPushToTalkMode
+                ? TurnMode.PushToTalk
+                : TurnMode.Continuous;
+        }
+
+        /// <summary>
+        /// Push-to-talk press signal (contract v1.11): client_interrupt +
+        /// start_voice {turn_mode}. Called by EstuaryMicrophone on button-down;
+        /// also usable directly by integrators driving PTT themselves.
+        /// </summary>
+        public async Task NotifyPushToTalkPressedAsync()
+        {
+            if (_client == null || !_client.IsConnected)
+                return;
+
+            await _client.NotifyPushToTalkPressedAsync();
+        }
+
+        /// <summary>
+        /// Push-to-talk release signal (contract v1.11): stop_voice — the server
+        /// finalizes and dispatches exactly one user turn.
+        /// </summary>
+        public async Task NotifyPushToTalkReleasedAsync()
+        {
+            if (_client == null || !_client.IsConnected)
+                return;
+
+            await _client.NotifyPushToTalkReleasedAsync();
+        }
+
+        /// <summary>
         /// Start voice mode on the backend (enables Deepgram STT).
         /// Call this before streaming audio to enable speech-to-text.
         /// </summary>
@@ -591,6 +632,20 @@ namespace Estuary
             if (_client == null || !_client.IsConnected)
             {
                 Debug.LogError("[EstuaryManager] Cannot start voice mode: not connected");
+                return;
+            }
+
+            SyncTurnModeFromActiveCharacter();
+
+            if (IsLiveKitEnabled && _client.SessionTurnMode == TurnMode.PushToTalk)
+            {
+                // Contract v1.11: on a PTT LiveKit session start_voice is the
+                // button-PRESS signal — emitting it at session start would hold
+                // the server's turn gate with no matching release (the STT
+                // stream comes from livekit_token/livekit_join, not from
+                // start_voice). The Python reference livekit start() emits no
+                // start_voice either; presses drive every turn.
+                Log("PTT over LiveKit: suppressing session-start start_voice (presses drive turns)");
                 return;
             }
 
@@ -630,6 +685,7 @@ namespace Estuary
                 return;
             }
 
+            SyncTurnModeFromActiveCharacter();
             SetLiveKitState(LiveKitConnectionState.RequestingToken);
             Log("Requesting LiveKit token...");
 
@@ -1148,11 +1204,24 @@ namespace Estuary
 
             if (_client != null && _client.IsConnected)
             {
+                SyncTurnModeFromActiveCharacter();
                 tasks.Add(_client.NotifyLiveKitJoinedAsync());
             }
 
-            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession)
+            bool isLiveKitPtt = _client != null && _client.SessionTurnMode == TurnMode.PushToTalk;
+
+            if (config != null && config.IsLiveKitEnabled && ActiveCharacterWantsVoiceSession && !isLiveKitPtt)
             {
+                // Skip the eager pipelined publish on LiveKit+PTT: it only
+                // serves time-to-first-audio, which is irrelevant before a
+                // press, and calling StartPublishingAsync directly here
+                // bypasses EstuaryMicrophone.StartLiveKitRecording's own
+                // publish-then-mute — leaving the track hot from bot-subscribe
+                // until the mic's mute lands (after livekit_ready ->
+                // OnLiveKitReadyForVoice -> StartRecording). The mic's own
+                // path already publishes+mutes at livekit_ready, and
+                // Unmute() falls back to StartPublishingAsync on the first
+                // press if publishing hasn't started yet.
                 tasks.Add(StartLiveKitPublishingAsync());
             }
 

@@ -196,7 +196,26 @@ Captures microphone audio for voice chat.
 | `IsRecording` | Whether currently recording |
 | `IsMuted` | Whether microphone is muted |
 | `IsLiveKitMode` | Using LiveKit native capture |
-| `PushToTalkKey` | Key for push-to-talk (None = always on) |
+| `PushToTalkKey` | Key for push-to-talk (None = no key binding) |
+| `PushToTalkEnabled` | Push-to-talk without a key — drive `PushToTalkPress()`/`PushToTalkRelease()` yourself |
+| `IsPushToTalkMode` | Whether PTT is active (key bound or explicitly enabled) |
+| `IsPushToTalkHeld` | Whether the talk button is currently held |
+
+#### Push-to-Talk
+
+Hold-to-talk with server-side turn handling (contract v1.11): while the button is
+held the server buffers speech instead of answering over you; release dispatches
+exactly one turn. The talk button only works during an active voice session
+(`StartVoiceSession()`); presses outside one are ignored. Set `Push To Talk Key` in
+the Inspector (e.g. Space), or tick `Push To Talk Enabled` and drive it from your
+own input (touch/XR):
+
+```csharp
+microphone.PushToTalkPress();    // button down — interrupts the bot, opens the mic
+microphone.PushToTalkRelease();  // button up — server finalizes and dispatches the turn
+```
+
+Works on both transports: LiveKit (track unmute/mute) and WebSocket (chunk gating).
 
 ### EstuaryAudioSource
 

@@ -207,6 +207,16 @@ namespace Estuary
         /// </summary>
         public bool IsVoiceModeActive => _isVoiceModeActive;
 
+        /// <summary>
+        /// Turn-taking mode declared to the server (SDK_CONTRACT v1.11). Set
+        /// before starting voice. PushToTalk rides on livekit_token /
+        /// livekit_join / start_voice as {"turn_mode":"push_to_talk"};
+        /// Continuous keeps the legacy null payloads (wire-identical to
+        /// pre-v1.11 builds). Deliberately persists across auto-reconnects so
+        /// the new server session is re-declared.
+        /// </summary>
+        public TurnMode SessionTurnMode { get; set; } = TurnMode.Continuous;
+
         #endregion
 
         #region Private Fields
@@ -488,7 +498,7 @@ namespace Estuary
             }
 
             Log("Requesting LiveKit token...");
-            await _socket.EmitAsync("livekit_token", null);
+            await _socket.EmitAsync("livekit_token", BuildTurnModePayload());
         }
 
         /// <summary>
@@ -511,7 +521,7 @@ namespace Estuary
             }
 
             Log("Starting voice mode...");
-            await _socket.EmitAsync("start_voice", null);
+            await _socket.EmitAsync("start_voice", BuildTurnModePayload());
         }
 
         /// <summary>
@@ -538,6 +548,50 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Push-to-talk press signal (contract v1.11). Emits client_interrupt
+        /// (a press means "I'm talking now" — stop any in-flight bot speech)
+        /// then start_voice carrying turn_mode: push_to_talk. Deliberately NOT
+        /// gated on _isVoiceModeActive: on LiveKit+PTT every press's
+        /// start_voice replies voice_started {"already_active": true} once a
+        /// session is active, which HandleVoiceStarted turns into
+        /// _isVoiceModeActive = true — so the flag is false before the first
+        /// press and true after it. A guard would swallow either the first
+        /// press (flag still false) or every later one (flag already true).
+        /// </summary>
+        public async Task NotifyPushToTalkPressedAsync()
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot signal push-to-talk press: not connected");
+                return;
+            }
+
+            await NotifyInterruptAsync();
+
+            Log("Push-to-talk pressed");
+            await _socket.EmitAsync("start_voice", new TurnModePayload());
+        }
+
+        /// <summary>
+        /// Push-to-talk release signal (contract v1.11). Emits stop_voice: the
+        /// server nudges the STT to finalize, merges buffered mid-hold finals,
+        /// and dispatches exactly ONE user turn (grace window
+        /// PTT_RELEASE_GRACE_MS, force-flush fallback). Not gated on
+        /// _isVoiceModeActive for the same reason as the press signal.
+        /// </summary>
+        public async Task NotifyPushToTalkReleasedAsync()
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot signal push-to-talk release: not connected");
+                return;
+            }
+
+            Log("Push-to-talk released");
+            await _socket.EmitAsync("stop_voice", null);
+        }
+
+        /// <summary>
         /// Notify the server that the client has joined the LiveKit room.
         /// This triggers the bot to join the same room.
         /// </summary>
@@ -550,7 +604,7 @@ namespace Estuary
             }
 
             Log("Notifying server of LiveKit join...");
-            await _socket.EmitAsync("livekit_join", null);
+            await _socket.EmitAsync("livekit_join", BuildTurnModePayload());
         }
 
         /// <summary>
@@ -791,6 +845,14 @@ namespace Estuary
             };
         }
 
+        /// <summary>
+        /// The v1.11 turn_mode declaration, or null in continuous mode —
+        /// JsonUtility cannot omit fields, so continuous sessions must emit the
+        /// JSON literal null to stay wire-identical to pre-v1.11 builds.
+        /// </summary>
+        private object BuildTurnModePayload() =>
+            SessionTurnMode == TurnMode.PushToTalk ? (object)new TurnModePayload() : null;
+
         private ISocketIOConnection CreateSocketConnection()
         {
             // In production, replace this with actual SocketIOClient:
@@ -798,6 +860,17 @@ namespace Estuary
 
             // For now, use the built-in WebSocket implementation
             return new BuiltInSocketIOConnection { DebugLogging = DebugLogging };
+        }
+
+        /// <summary>
+        /// Test seam: inject a fake socket and mark the client Connected so the
+        /// emit paths run headless. EditMode tests only (InternalsVisibleTo
+        /// Estuary.Tests).
+        /// </summary>
+        internal void AttachSocketForTest(ISocketIOConnection socket)
+        {
+            _socket = socket;
+            SetState(ConnectionState.Connected);
         }
 
         private void HandleConnected()
@@ -818,7 +891,16 @@ namespace Estuary
             public SessionCapabilities capabilities;  // per-session device capability declaration
             public bool enable_animation;  // opt in to bot_animation blendshape frames
         }
-        
+
+        // Internal (not private, unlike sibling payloads) so wire-emission
+        // tests can assert the typed payload via InternalsVisibleTo. The field
+        // name is the wire key (JsonUtility).
+        [Serializable]
+        internal class TurnModePayload
+        {
+            public string turn_mode = "push_to_talk";
+        }
+
         [Serializable]
         private class TextPayload
         {

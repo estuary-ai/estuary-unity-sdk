@@ -44,6 +44,10 @@ namespace Estuary
         private KeyCode pushToTalkKey = KeyCode.None;
 
         [SerializeField]
+        [Tooltip("Enable push-to-talk without a key binding — drive PushToTalkPress()/PushToTalkRelease() from your own input (touch/XR). Implied when a key is set.")]
+        private bool pushToTalkEnabled = false;
+
+        [SerializeField]
         [Tooltip("Enable voice activity detection (WebSocket mode only - LiveKit handles VAD server-side)")]
         private bool useVoiceActivityDetection = false;
 
@@ -119,6 +123,32 @@ namespace Estuary
         /// </summary>
         public bool IsLiveKitMode => _useLiveKit;
 
+        /// <summary>
+        /// Key held for push-to-talk (None = no key binding). Setting a key
+        /// enables push-to-talk mode. README-documented public API.
+        /// </summary>
+        public KeyCode PushToTalkKey
+        {
+            get => pushToTalkKey;
+            set => pushToTalkKey = value;
+        }
+
+        /// <summary>
+        /// Enables push-to-talk without a key binding — drive
+        /// PushToTalkPress()/PushToTalkRelease() from your own input.
+        /// </summary>
+        public bool PushToTalkEnabled
+        {
+            get => pushToTalkEnabled;
+            set => pushToTalkEnabled = value;
+        }
+
+        /// <summary>Whether push-to-talk is active for this mic (key bound OR explicitly enabled).</summary>
+        public bool IsPushToTalkMode => pushToTalkEnabled || pushToTalkKey != KeyCode.None;
+
+        /// <summary>Whether the push-to-talk button is currently held.</summary>
+        public bool IsPushToTalkHeld => _pttHeld;
+
         #endregion
 
         #region C# Events
@@ -173,6 +203,9 @@ namespace Estuary
         // Push-to-talk state
         private bool _pttWasPressed;
 
+        // True while the PTT button is held (key or programmatic)
+        private bool _pttHeld;
+
         // Constants
         private const int RECORDING_LENGTH_SECONDS = 10;
 
@@ -187,10 +220,22 @@ namespace Estuary
 
         private void Update()
         {
-            // Handle push-to-talk for LiveKit mode
-            if (_useLiveKit && _liveKitManager != null && pushToTalkKey != KeyCode.None)
+            // Push-to-talk key edges (both transports). Programmatic callers
+            // use PushToTalkPress()/PushToTalkRelease() directly.
+            if (pushToTalkKey != KeyCode.None)
             {
-                HandleLiveKitPushToTalk();
+                var isPressed = Input.GetKey(pushToTalkKey);
+
+                if (isPressed && !_pttWasPressed)
+                {
+                    PushToTalkPress();
+                }
+                else if (!isPressed && _pttWasPressed)
+                {
+                    PushToTalkRelease();
+                }
+
+                _pttWasPressed = isPressed;
             }
         }
 
@@ -243,17 +288,42 @@ namespace Estuary
         /// </summary>
         public async void StopRecording()
         {
-            if (!IsRecording)
-                return;
+            if (_pttHeld)
+            {
+                // Mid-hold teardown: release the server's PTT gate. Audio stops
+                // below anyway, so only the signal is needed (no Mute round-trip).
+                _pttHeld = false;
+                // Mirrors the possibly-still-held physical key so the edge
+                // detector waits for a real key-up; if the key is actually up,
+                // the next frame's falling edge calls PushToTalkRelease(),
+                // which no-ops on !_pttHeld and self-corrects. (Setting this
+                // false instead would read as a rising edge next frame,
+                // re-firing PushToTalkPress() and re-opening the mic.)
+                _pttWasPressed = true;
+                if (EstuaryManager.HasInstance)
+                {
+                    _ = EstuaryManager.Instance.NotifyPushToTalkReleasedAsync();
+                }
+            }
 
             if (_useLiveKit)
             {
-                await StopLiveKitRecording();
+                // Always tear down LiveKit publishing/VAD capture, even when
+                // IsRecording is already false — PTT's hot-mic fix leaves
+                // IsRecording=false as the steady (muted) state while the
+                // LiveKit publish handle and Unity's VAD mic capture are
+                // still live. Gating on IsRecording here would leak both.
+                if (_liveKitManager != null)
+                {
+                    await StopLiveKitRecording();
+                }
+                return;
             }
-            else
-            {
-                StopWebSocketRecording();
-            }
+
+            if (!IsRecording)
+                return;
+
+            StopWebSocketRecording();
         }
 
         /// <summary>
@@ -303,6 +373,67 @@ namespace Estuary
             else
             {
                 StartRecording();
+            }
+        }
+
+        /// <summary>
+        /// Push-to-talk press (contract v1.11). Signals the gateway
+        /// (client_interrupt + start_voice with turn_mode) and opens the audio
+        /// path — LiveKit unmutes the track; WebSocket mode starts passing
+        /// chunks. No-op when push-to-talk mode is off or already held. Call
+        /// from touch/XR buttons for keyboard-free PTT.
+        /// </summary>
+        public void PushToTalkPress()
+        {
+            if (!IsPushToTalkMode || _pttHeld)
+                return;
+
+            // PTT is a voice-session control; without an active session a
+            // press must be inert — otherwise a bound key fires
+            // client_interrupt + start_voice while merely connected (text
+            // mode, menus), cancelling bot text responses and potentially
+            // opening a billable STT stream with no voice session behind it.
+            if (targetCharacter == null || !targetCharacter.IsVoiceSessionActive)
+                return;
+
+            _pttHeld = true;
+
+            // Signal first (best-effort ordering only: the signal rides
+            // Socket.IO and audio rides WebRTC — different transports, so
+            // there's no strict guarantee the press lands before frames).
+            if (EstuaryManager.HasInstance)
+            {
+                _ = EstuaryManager.Instance.NotifyPushToTalkPressedAsync();
+            }
+
+            if (_useLiveKit && _liveKitManager != null)
+            {
+                Unmute();
+            }
+            // WebSocket mode: the chunk gate reads _pttHeld — nothing else to open.
+        }
+
+        /// <summary>
+        /// Push-to-talk release (contract v1.11). Closes the audio path, then
+        /// signals stop_voice — the server finalize-nudges the STT, merges held
+        /// finals, and dispatches exactly one user turn. No-op when not held.
+        /// </summary>
+        public void PushToTalkRelease()
+        {
+            if (!_pttHeld)
+                return;
+
+            _pttHeld = false;
+
+            // Audio off first so no frames trail the release signal.
+            if (_useLiveKit && _liveKitManager != null)
+            {
+                Mute();
+            }
+
+            if (EstuaryManager.HasInstance)
+            {
+                _ = EstuaryManager.Instance.NotifyPushToTalkReleasedAsync();
             }
         }
 
@@ -441,6 +572,18 @@ namespace Estuary
 
             if (success)
             {
+                if (IsPushToTalkMode && !_pttHeld)
+                {
+                    // PTT initial state: never run hot before the first press.
+                    // Muting via the manager keeps OnMuteStateChanged →
+                    // IsRecording/events consistent.
+                    Debug.Log("[EstuaryMicrophone] PTT mode: starting muted until first press");
+                    await _liveKitManager.MuteAsync();
+                    IsRecording = false;
+                    StartUnityMicrophoneForVAD();
+                    return;
+                }
+
                 IsRecording = true;
                 Debug.Log("[EstuaryMicrophone] LiveKit microphone active (AEC enabled)");
 
@@ -604,6 +747,12 @@ namespace Estuary
 
             Debug.Log("[EstuaryMicrophone] Stopping LiveKit microphone...");
 
+            // Captured before teardown: safe/idempotent to call this when
+            // already muted or not publishing (e.g. tearing down from the PTT
+            // muted steady state), but events must only fire for a real
+            // start->stop transition, not on every redundant teardown call.
+            var wasRecording = IsRecording;
+
             // Stop VAD microphone first
             StopUnityMicrophoneForVAD();
 
@@ -612,31 +761,25 @@ namespace Estuary
 
             Debug.Log("[EstuaryMicrophone] LiveKit microphone stopped");
 
-            // Fire events
-            OnRecordingStopped?.Invoke();
-            onRecordingStopped?.Invoke();
-        }
-
-        private void HandleLiveKitPushToTalk()
-        {
-            var isPressed = Input.GetKey(pushToTalkKey);
-
-            if (isPressed && !_pttWasPressed)
+            if (wasRecording)
             {
-                // Key just pressed - unmute
-                Unmute();
+                OnRecordingStopped?.Invoke();
+                onRecordingStopped?.Invoke();
             }
-            else if (!isPressed && _pttWasPressed)
-            {
-                // Key just released - mute
-                Mute();
-            }
-
-            _pttWasPressed = isPressed;
         }
 
         private void OnLiveKitMuteStateChanged(bool isMuted)
         {
+            // Ignore a spurious unmute: StartPublishingAsync's unmuted
+            // callback and the PTT hot-mic fix's MuteAsync callback are both
+            // enqueued onto the main-thread queue at PTT session start, and
+            // depending on TCS continuation inlining the unmuted event can
+            // drain LAST — flipping IsRecording=true while the track is
+            // actually muted. A real unmute always comes from
+            // PushToTalkPress(), which sets _pttHeld first.
+            if (!isMuted && IsPushToTalkMode && !_pttHeld)
+                return;
+
             IsRecording = !isMuted;
 
             if (isMuted)
@@ -803,8 +946,10 @@ namespace Estuary
                     return;
             }
 
-            // Check push-to-talk (WebSocket mode)
-            if (pushToTalkKey != KeyCode.None && !Input.GetKey(pushToTalkKey))
+            // Push-to-talk gate (WebSocket mode) — _pttHeld is driven by the
+            // key edges in Update() and by PushToTalkPress()/Release(), so
+            // programmatic PTT works here too.
+            if (IsPushToTalkMode && !_pttHeld)
             {
                 return;
             }
