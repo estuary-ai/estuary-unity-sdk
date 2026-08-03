@@ -44,6 +44,9 @@ namespace Estuary
         [Tooltip("Microphone component for voice input (optional)")]
         private EstuaryMicrophone microphone;
 
+        /// <summary>The microphone component wired to this character (may be null).</summary>
+        public EstuaryMicrophone Microphone => microphone;
+
         [SerializeField]
         [Tooltip("Automatically start a voice session after connecting")]
         private bool autoStartVoiceSession = false;
