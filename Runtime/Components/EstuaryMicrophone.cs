@@ -293,24 +293,37 @@ namespace Estuary
                 // Mid-hold teardown: release the server's PTT gate. Audio stops
                 // below anyway, so only the signal is needed (no Mute round-trip).
                 _pttHeld = false;
-                _pttWasPressed = false;
+                // Mirrors the possibly-still-held physical key so the edge
+                // detector waits for a real key-up; if the key is actually up,
+                // the next frame's falling edge calls PushToTalkRelease(),
+                // which no-ops on !_pttHeld and self-corrects. (Setting this
+                // false instead would read as a rising edge next frame,
+                // re-firing PushToTalkPress() and re-opening the mic.)
+                _pttWasPressed = true;
                 if (EstuaryManager.HasInstance)
                 {
                     _ = EstuaryManager.Instance.NotifyPushToTalkReleasedAsync();
                 }
             }
 
+            if (_useLiveKit)
+            {
+                // Always tear down LiveKit publishing/VAD capture, even when
+                // IsRecording is already false — PTT's hot-mic fix leaves
+                // IsRecording=false as the steady (muted) state while the
+                // LiveKit publish handle and Unity's VAD mic capture are
+                // still live. Gating on IsRecording here would leak both.
+                if (_liveKitManager != null)
+                {
+                    await StopLiveKitRecording();
+                }
+                return;
+            }
+
             if (!IsRecording)
                 return;
 
-            if (_useLiveKit)
-            {
-                await StopLiveKitRecording();
-            }
-            else
-            {
-                StopWebSocketRecording();
-            }
+            StopWebSocketRecording();
         }
 
         /// <summary>
@@ -373,6 +386,14 @@ namespace Estuary
         public void PushToTalkPress()
         {
             if (!IsPushToTalkMode || _pttHeld)
+                return;
+
+            // PTT is a voice-session control; without an active session a
+            // press must be inert — otherwise a bound key fires
+            // client_interrupt + start_voice while merely connected (text
+            // mode, menus), cancelling bot text responses and potentially
+            // opening a billable STT stream with no voice session behind it.
+            if (targetCharacter == null || !targetCharacter.IsVoiceSessionActive)
                 return;
 
             _pttHeld = true;
@@ -724,6 +745,12 @@ namespace Estuary
 
             Debug.Log("[EstuaryMicrophone] Stopping LiveKit microphone...");
 
+            // Captured before teardown: safe/idempotent to call this when
+            // already muted or not publishing (e.g. tearing down from the PTT
+            // muted steady state), but events must only fire for a real
+            // start->stop transition, not on every redundant teardown call.
+            var wasRecording = IsRecording;
+
             // Stop VAD microphone first
             StopUnityMicrophoneForVAD();
 
@@ -732,13 +759,25 @@ namespace Estuary
 
             Debug.Log("[EstuaryMicrophone] LiveKit microphone stopped");
 
-            // Fire events
-            OnRecordingStopped?.Invoke();
-            onRecordingStopped?.Invoke();
+            if (wasRecording)
+            {
+                OnRecordingStopped?.Invoke();
+                onRecordingStopped?.Invoke();
+            }
         }
 
         private void OnLiveKitMuteStateChanged(bool isMuted)
         {
+            // Ignore a spurious unmute: StartPublishingAsync's unmuted
+            // callback and the PTT hot-mic fix's MuteAsync callback are both
+            // enqueued onto the main-thread queue at PTT session start, and
+            // depending on TCS continuation inlining the unmuted event can
+            // drain LAST — flipping IsRecording=true while the track is
+            // actually muted. A real unmute always comes from
+            // PushToTalkPress(), which sets _pttHeld first.
+            if (!isMuted && IsPushToTalkMode && !_pttHeld)
+                return;
+
             IsRecording = !isMuted;
 
             if (isMuted)
