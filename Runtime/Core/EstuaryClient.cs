@@ -548,6 +548,48 @@ namespace Estuary
         }
 
         /// <summary>
+        /// Push-to-talk press signal (contract v1.11). Emits client_interrupt
+        /// (a press means "I'm talking now" — stop any in-flight bot speech)
+        /// then start_voice carrying turn_mode: push_to_talk. Deliberately NOT
+        /// gated on _isVoiceModeActive: presses are per-turn signals, and on
+        /// LiveKit PTT sessions voice_started never fires (the session-start
+        /// start_voice is suppressed), so the session guard would swallow
+        /// every press.
+        /// </summary>
+        public async Task NotifyPushToTalkPressedAsync()
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot signal push-to-talk press: not connected");
+                return;
+            }
+
+            await NotifyInterruptAsync();
+
+            Log("Push-to-talk pressed");
+            await _socket.EmitAsync("start_voice", new TurnModePayload());
+        }
+
+        /// <summary>
+        /// Push-to-talk release signal (contract v1.11). Emits stop_voice: the
+        /// server nudges the STT to finalize, merges buffered mid-hold finals,
+        /// and dispatches exactly ONE user turn (grace window
+        /// PTT_RELEASE_GRACE_MS, force-flush fallback). Not gated on
+        /// _isVoiceModeActive for the same reason as the press signal.
+        /// </summary>
+        public async Task NotifyPushToTalkReleasedAsync()
+        {
+            if (!IsConnected)
+            {
+                LogError("Cannot signal push-to-talk release: not connected");
+                return;
+            }
+
+            Log("Push-to-talk released");
+            await _socket.EmitAsync("stop_voice", null);
+        }
+
+        /// <summary>
         /// Notify the server that the client has joined the LiveKit room.
         /// This triggers the bot to join the same room.
         /// </summary>

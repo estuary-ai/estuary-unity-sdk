@@ -111,5 +111,35 @@ namespace Estuary.Tests
             Assert.AreEqual(typeof(string), field.FieldType);
             Assert.AreEqual("push_to_talk", new EstuaryClient.TurnModePayload().turn_mode);
         }
+
+        [Test]
+        public void Pressed_EmitsInterruptThenStartVoiceWithTurnMode()
+        {
+            // Fresh client: voice_started has never arrived, so this also
+            // proves the press path has no _isVoiceModeActive guard.
+            _client.SessionTurnMode = TurnMode.PushToTalk;
+
+            _client.NotifyPushToTalkPressedAsync().GetAwaiter().GetResult();
+
+            Assert.AreEqual(2, _socket.Emitted.Count);
+            Assert.AreEqual("client_interrupt", _socket.Emitted[0].Name,
+                "a press means 'I'm talking now' — in-flight bot speech must be interrupted first");
+            Assert.AreEqual("start_voice", _socket.Emitted[1].Name);
+            var payload = _socket.Emitted[1].Data as EstuaryClient.TurnModePayload;
+            Assert.IsNotNull(payload, "the press signal always declares turn_mode");
+            Assert.AreEqual("push_to_talk", payload.turn_mode);
+        }
+
+        [Test]
+        public void Released_EmitsStopVoiceWithNullPayload()
+        {
+            _client.SessionTurnMode = TurnMode.PushToTalk;
+
+            _client.NotifyPushToTalkReleasedAsync().GetAwaiter().GetResult();
+
+            Assert.AreEqual(1, _socket.Emitted.Count);
+            Assert.AreEqual("stop_voice", _socket.Emitted[0].Name);
+            Assert.IsNull(_socket.Emitted[0].Data);
+        }
     }
 }
