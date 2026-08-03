@@ -800,6 +800,17 @@ namespace Estuary
             return new BuiltInSocketIOConnection { DebugLogging = DebugLogging };
         }
 
+        /// <summary>
+        /// Test seam: inject a fake socket and mark the client Connected so the
+        /// emit paths run headless. EditMode tests only (InternalsVisibleTo
+        /// Estuary.Tests).
+        /// </summary>
+        internal void AttachSocketForTest(ISocketIOConnection socket)
+        {
+            _socket = socket;
+            SetState(ConnectionState.Connected);
+        }
+
         private void HandleConnected()
         {
             // Auth was sent in the namespace connect message, server should respond with session_info
