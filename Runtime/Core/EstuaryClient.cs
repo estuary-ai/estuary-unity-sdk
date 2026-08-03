@@ -187,7 +187,20 @@ namespace Estuary
         /// <summary>
         /// Enable debug logging.
         /// </summary>
-        public bool DebugLogging { get; set; }
+        private bool _debugLogging;
+
+        public bool DebugLogging
+        {
+            get => _debugLogging;
+            set
+            {
+                _debugLogging = value;
+                if (_socket is BuiltInSocketIOConnection builtIn)
+                {
+                    builtIn.DebugLogging = value;
+                }
+            }
+        }
 
         /// <summary>
         /// Whether voice mode (backend STT) is currently active.
@@ -784,7 +797,7 @@ namespace Estuary
             // return new SocketIOClientWrapper();
 
             // For now, use the built-in WebSocket implementation
-            return new BuiltInSocketIOConnection();
+            return new BuiltInSocketIOConnection { DebugLogging = DebugLogging };
         }
 
         private void HandleConnected()
@@ -1231,8 +1244,9 @@ namespace Estuary
             try
             {
                 var update = SceneGraphUpdate.FromJson(json);
-                // Always log scene graph updates (important for debugging world model)
-                Debug.Log($"[EstuaryClient] Received scene graph update: {update.SceneGraph?.EntityCount ?? 0} entities");
+                // Scene graph updates are useful for debugging the world model, but they
+                // arrive continuously -- gate them like the rest of the client's logging.
+                Log($"Received scene graph update: {update.SceneGraph?.EntityCount ?? 0} entities");
                 DispatchToMainThread(() => OnSceneGraphUpdate?.Invoke(update));
             }
             catch (Exception e)
@@ -1472,6 +1486,14 @@ namespace Estuary
         private string _namespace;
         private object _auth;  // Store auth for namespace connection
 
+        /// <summary>
+        /// Mirrors <see cref="EstuaryClient.DebugLogging"/>. These logs are per-event and
+        /// stream_audio fires ~10x/second, so each call site below is guarded individually
+        /// rather than routed through a helper -- that keeps the interpolated string from
+        /// being built at all when logging is off.
+        /// </summary>
+        public bool DebugLogging { get; set; }
+
         public async Task ConnectAsync(string url, string ns, object auth)
         {
             _namespace = ns;
@@ -1533,7 +1555,11 @@ namespace Estuary
             }
             
             var message = $"42{_namespace},[\"{eventName}\",{json}]";
-            Debug.Log($"[SocketIO] Emitting: {message}");
+            if (DebugLogging)
+            {
+                // Log the shape, never the payload: stream_audio carries ~10KB of base64.
+                Debug.Log($"[SocketIO] Emitting '{eventName}' ({json.Length} chars)");
+            }
             var bytes = System.Text.Encoding.UTF8.GetBytes(message);
 
             await _webSocket.SendAsync(
@@ -1630,12 +1656,19 @@ namespace Estuary
                     connectMsg = $"40{_namespace},";
                 }
                 _ = SendRawAsync(connectMsg);
-                Debug.Log($"[SocketIO] Sent namespace connect with auth: {connectMsg}");
+                if (DebugLogging)
+                {
+                    // connectMsg embeds the auth payload (API key) -- log the namespace only.
+                    Debug.Log($"[SocketIO] Sent namespace connect for '{_namespace}'");
+                }
             }
             else if (message.StartsWith($"40{_namespace}") || message.StartsWith("40,"))
             {
                 // Connected to namespace - THIS is when we should send authentication
-                Debug.Log($"[SocketIO] Namespace connected: {message}");
+                if (DebugLogging)
+                {
+                    Debug.Log($"[SocketIO] Namespace connected: {message}");
+                }
                 OnConnected?.Invoke();
             }
             else if (message.StartsWith("44"))
@@ -1692,20 +1725,25 @@ namespace Estuary
                 }
 
                 // Dispatch to handler
-                Debug.Log($"[SocketIO] Received event '{eventName}' with data length {dataJson?.Length ?? 0}");
-                
-                // Extra debug logging for bot_voice events to help diagnose audio issues
-                if (eventName == "bot_voice")
+                if (DebugLogging)
                 {
-                    Debug.Log($"[SocketIO] bot_voice event received! Data preview: {(dataJson?.Length > 200 ? dataJson.Substring(0, 200) + "..." : dataJson ?? "null")}");
+                    Debug.Log($"[SocketIO] Received event '{eventName}' with data length {dataJson?.Length ?? 0}");
+
+                    // Extra debug logging for bot_voice events to help diagnose audio issues
+                    if (eventName == "bot_voice")
+                    {
+                        Debug.Log($"[SocketIO] bot_voice event received! Data preview: {(dataJson?.Length > 200 ? dataJson.Substring(0, 200) + "..." : dataJson ?? "null")}");
+                    }
                 }
                 
                 if (_eventHandlers.TryGetValue(eventName, out var handler))
                 {
                     handler(dataJson);
                 }
-                else
+                else if (DebugLogging)
                 {
+                    // Some server events are intentionally unconsumed (turn_metrics, for one),
+                    // so an absent handler is expected traffic rather than a fault.
                     Debug.LogWarning($"[SocketIO] No handler registered for event '{eventName}'");
                 }
             }
