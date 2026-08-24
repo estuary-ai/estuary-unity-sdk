@@ -1,0 +1,48 @@
+# Normalize line endings.
+#
+# This package is checked out on a Windows drive under WSL, which rewrites
+# files with CRLF and makes `git status` report the whole tree as modified
+# (~134 files, none of them real changes). With `text=auto` git stores LF in
+# the repository, and `eol=lf` checks LF back out, so the working tree and the
+# index agree regardless of platform.
+* text=auto eol=lf
+
+# Windows-native scripts genuinely need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Unity serialized assets and package metadata are YAML/JSON text.
+*.meta    text eol=lf
+*.asmdef  text eol=lf
+*.asset   text eol=lf
+*.prefab  text eol=lf
+*.unity   text eol=lf
+
+*.cs text eol=lf diff=csharp
+*.mm text eol=lf diff=objc
+*.m  text eol=lf diff=objc
+
+# Binary formats that may land in Samples~ or Runtime/Plugins.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.psd  binary
+*.tga  binary
+*.fbx  binary
+*.glb  binary
+*.gltf binary
+*.ttf  binary
+*.otf  binary
+*.wav  binary
+*.mp3  binary
+*.ogg  binary
+*.dll  binary
+*.so   binary
+*.a    binary
+*.dylib binary
+*.aar  binary
+*.jar  binary
+*.bundle binary
+*.unitypackage binary
+*.zip  binary
