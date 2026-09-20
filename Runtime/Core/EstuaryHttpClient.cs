@@ -116,6 +116,7 @@ namespace Estuary
             new[] { "model_url", "modelUrl" },
             new[] { "model_preview_url", "modelPreviewUrl" },
             new[] { "model_status", "modelStatus" },
+            new[] { "model_provider", "modelProvider" },
             new[] { "source_image_url", "sourceImageUrl" },
             new[] { "generated_voice_id", "generatedVoiceId" },
         };
@@ -123,7 +124,7 @@ namespace Estuary
         /// <summary>
         /// Parses a character body into AgentResponse. Accepts both the v1 CharacterResponse
         /// shape (snake_case model/voice fields) and the legacy camelCase agent dict.
-        /// The v1 shape has no modelProvider, so ModelProvider stays null for it.
+        /// ModelProvider is null when the gateway predates model_provider on the v1 shape.
         /// </summary>
         internal static AgentResponse ParseCharacter(string json)
         {
@@ -139,8 +140,7 @@ namespace Estuary
         /// <summary>
         /// Uploads an image to generate a character via POST /api/v1/characters/from-image.
         /// Multipart form upload with "image" field. The server answers 201 with the v1
-        /// CharacterResponse shape, which is mapped onto AgentResponse (ModelProvider is not
-        /// part of that shape and stays null).
+        /// CharacterResponse shape, which is mapped onto AgentResponse.
         /// </summary>
         public IEnumerator UploadImageToCharacter(
             byte[] imageBytes, string mimeType,
@@ -296,8 +296,8 @@ namespace Estuary
         /// <summary>
         /// Gets all agents/characters for the authenticated user via GET /api/agents.
         /// Returns a simple JSON array (no pagination).
-        /// Deliberately still on the legacy route: GET /api/v1/characters is paginated and its
-        /// items carry no modelProvider, which EstuaryModelLoader needs to orient the GLB.
+        /// Deliberately still on the legacy route: GET /api/v1/characters is paginated (max 100)
+        /// and this method has no paging parameters, so callers expect every character.
         /// </summary>
         public IEnumerator GetAgents(Action<List<AgentResponse>> onSuccess, Action<string> onError)
         {

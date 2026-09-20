@@ -32,8 +32,8 @@ namespace Estuary
         public static EstuaryRestRoute GenerateModel(string agentId)
             => new EstuaryRestRoute("POST", $"/api/v1/characters/{agentId}/model");
 
-        // Still on the legacy route: the v1 list is paginated and its CharacterResponse
-        // has no modelProvider, which EstuaryModelLoader needs for the GLB orientation fix.
+        // Still on the legacy route: the v1 list is paginated (max 100) and GetAgents has
+        // no paging parameters, so callers expect every character.
         public static EstuaryRestRoute GetAgents()
             => new EstuaryRestRoute("GET", "/api/agents");
 

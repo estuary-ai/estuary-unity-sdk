@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Canonical REST routes** (SCRUM-255): `UploadImageToCharacter` now calls `POST /api/v1/characters/from-image`, `GenerateModel` calls `POST /api/v1/characters/{id}/model`, `GetModelStatus`/`PollModelStatus` call `GET /api/v1/characters/{id}/model`, and `DeleteAgent` calls `DELETE /api/v1/characters/{id}`. Method signatures and result types are unchanged. `AgentResponse.ModelProvider` is null on the `UploadImageToCharacter` result because the v1 character shape does not carry it. `GetAgents` stays on `GET /api/agents` for now (the v1 list is paginated and omits `modelProvider`). Requires a gateway that serves these `/api/v1` routes
+- **Canonical REST routes** (SCRUM-255): `UploadImageToCharacter` now calls `POST /api/v1/characters/from-image`, `GenerateModel` calls `POST /api/v1/characters/{id}/model`, `GetModelStatus`/`PollModelStatus` call `GET /api/v1/characters/{id}/model`, and `DeleteAgent` calls `DELETE /api/v1/characters/{id}`. Method signatures and result types are unchanged. `AgentResponse.ModelProvider` on the `UploadImageToCharacter` result is filled from the v1 `model_provider` field when the gateway sends it, and stays null against an older gateway that does not. `GetAgents` stays on `GET /api/agents` for now (the v1 list is paginated and `GetAgents` has no paging parameters). Requires a gateway that serves these `/api/v1` routes
 
 ## [1.0.0] - 2024-12-16
 

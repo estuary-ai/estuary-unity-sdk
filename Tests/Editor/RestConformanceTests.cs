@@ -29,9 +29,6 @@ namespace Estuary.Tests
                 { "DeleteAgent", EstuaryRestRoutes.DeleteAgent },
             };
 
-        // Listed in rest.json but deliberately still on a legacy route (see CLAUDE.md Parity Status).
-        static readonly HashSet<string> KnownLegacy = new HashSet<string> { "GetAgents" };
-
         static void AssertRoute(EstuaryRestRoute route, string method, string path)
         {
             Assert.AreEqual(method, route.Method);
@@ -89,7 +86,6 @@ namespace Estuary.Tests
                 if (method == null) continue;
 
                 Assert.IsTrue(Routes.ContainsKey(method), $"case {c["id"]}: no route builder for {method}");
-                if (KnownLegacy.Contains(method)) continue;
 
                 var route = Routes[method](characterId);
                 Assert.AreEqual((string)c["method"], route.Method, $"case {c["id"]} method");
@@ -106,6 +102,7 @@ namespace Estuary.Tests
                 ""id"": ""c1"", ""name"": ""Nyx"", ""tagline"": ""oracle"", ""avatar"": ""pic.png"",
                 ""appearance"": ""tall"", ""motive"": null,
                 ""model_url"": ""m.glb"", ""model_preview_url"": ""p.glb"", ""model_status"": ""generating"",
+                ""model_provider"": ""meshy"",
                 ""source_image_url"": ""src.jpg"", ""generated_voice_id"": ""v1"", ""model_rigged"": false }";
 
             var a = EstuaryHttpClient.ParseCharacter(json);
@@ -117,6 +114,14 @@ namespace Estuary.Tests
             Assert.AreEqual("generating", a.ModelStatus);
             Assert.AreEqual("src.jpg", a.SourceImageUrl);
             Assert.AreEqual("v1", a.GeneratedVoiceId);
+            Assert.AreEqual("meshy", a.ModelProvider);
+        }
+
+        [Test]
+        public void ParseCharacter_LeavesModelProviderNullWhenGatewayOmitsIt()
+        {
+            var a = EstuaryHttpClient.ParseCharacter(@"{ ""id"": ""c1"", ""model_status"": ""generating"" }");
+            Assert.AreEqual("generating", a.ModelStatus);
             Assert.IsNull(a.ModelProvider);
         }
 
