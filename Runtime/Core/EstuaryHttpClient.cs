@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using Estuary.Models;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Estuary
 {
@@ -66,30 +67,80 @@ namespace Estuary
         /// <summary>
         /// Applies auth header to a UnityWebRequest.
         /// Uses Bearer token if available, otherwise X-API-Key (only when no token provider is configured).
+        /// Also identifies the SDK to the gateway via X-Estuary-Client.
         /// </summary>
         internal void ApplyAuth(UnityWebRequest request, string token)
         {
+            foreach (var header in BuildHeaders(token))
+                request.SetRequestHeader(header.Key, header.Value);
+        }
+
+        /// <summary>
+        /// Headers sent on every Estuary REST request. Split from ApplyAuth (and static) so
+        /// EditMode tests can inspect them without a UnityWebRequest or a config asset.
+        /// </summary>
+        internal Dictionary<string, string> BuildHeaders(string token)
+            => BuildHeaders(token, _apiKey, _config?.TokenProvider != null, PlayerId);
+
+        internal static Dictionary<string, string> BuildHeaders(
+            string token, string apiKey, bool hasTokenProvider, string playerId)
+        {
+            var headers = new Dictionary<string, string>
+            {
+                { EstuarySdkInfo.ClientHeaderName, EstuarySdkInfo.ClientHeaderValue }
+            };
+
             if (!string.IsNullOrEmpty(token))
             {
-                request.SetRequestHeader("Authorization", $"Bearer {token}");
+                headers["Authorization"] = $"Bearer {token}";
             }
-            else if (_config?.TokenProvider == null && !string.IsNullOrEmpty(_apiKey))
+            else if (!hasTokenProvider && !string.IsNullOrEmpty(apiKey))
             {
                 // Only use API key when no token provider is configured (server-to-server / legacy SDK).
                 // When a token provider exists (per-user Firebase auth), falling back to the
                 // API key would silently escalate to developer-level access.
-                request.SetRequestHeader("X-API-Key", _apiKey);
+                headers["X-API-Key"] = apiKey;
             }
 
-            if (!string.IsNullOrEmpty(PlayerId))
+            if (!string.IsNullOrEmpty(playerId))
             {
-                request.SetRequestHeader("X-Player-Id", PlayerId);
+                headers["X-Player-Id"] = playerId;
             }
+
+            return headers;
+        }
+
+        // v1 CharacterResponse spells these snake_case; AgentResponse keeps the legacy camelCase names.
+        static readonly string[][] V1CharacterFieldAliases =
+        {
+            new[] { "model_url", "modelUrl" },
+            new[] { "model_preview_url", "modelPreviewUrl" },
+            new[] { "model_status", "modelStatus" },
+            new[] { "source_image_url", "sourceImageUrl" },
+            new[] { "generated_voice_id", "generatedVoiceId" },
+        };
+
+        /// <summary>
+        /// Parses a character body into AgentResponse. Accepts both the v1 CharacterResponse
+        /// shape (snake_case model/voice fields) and the legacy camelCase agent dict.
+        /// The v1 shape has no modelProvider, so ModelProvider stays null for it.
+        /// </summary>
+        internal static AgentResponse ParseCharacter(string json)
+        {
+            var obj = JObject.Parse(json);
+            foreach (var alias in V1CharacterFieldAliases)
+            {
+                if (obj[alias[1]] == null && obj[alias[0]] != null)
+                    obj[alias[1]] = obj[alias[0]];
+            }
+            return obj.ToObject<AgentResponse>();
         }
 
         /// <summary>
-        /// Uploads an image to generate a character via POST /api/generate/image-to-character.
-        /// Multipart form upload with "image" field.
+        /// Uploads an image to generate a character via POST /api/v1/characters/from-image.
+        /// Multipart form upload with "image" field. The server answers 201 with the v1
+        /// CharacterResponse shape, which is mapped onto AgentResponse (ModelProvider is not
+        /// part of that shape and stays null).
         /// </summary>
         public IEnumerator UploadImageToCharacter(
             byte[] imageBytes, string mimeType,
@@ -98,7 +149,7 @@ namespace Estuary
             string token = null;
             yield return ResolveToken(t => token = t);
 
-            var url = $"{_serverUrl}/api/generate/image-to-character";
+            var url = _serverUrl + EstuaryRestRoutes.UploadImageToCharacter().Path;
 
             var form = new List<IMultipartFormSection>
             {
@@ -120,8 +171,7 @@ namespace Estuary
 
                 try
                 {
-                    var response = JsonConvert.DeserializeObject<AgentResponse>(
-                        request.downloadHandler.text);
+                    var response = ParseCharacter(request.downloadHandler.text);
                     onSuccess?.Invoke(response);
                 }
                 catch (Exception e)
@@ -132,7 +182,7 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Gets the current model generation status via GET /api/generate/{agentId}/model-status.
+        /// Gets the current model generation status via GET /api/v1/characters/{agentId}/model.
         /// </summary>
         public IEnumerator GetModelStatus(
             string agentId,
@@ -141,7 +191,7 @@ namespace Estuary
             string token = null;
             yield return ResolveToken(t => token = t);
 
-            var url = $"{_serverUrl}/api/generate/{agentId}/model-status";
+            var url = _serverUrl + EstuaryRestRoutes.GetModelStatus(agentId).Path;
 
             using (var request = UnityWebRequest.Get(url))
             {
@@ -170,8 +220,10 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Triggers 3D model generation for an existing agent via POST /api/generate/{agentId}/generate-model.
+        /// Triggers 3D model generation for an existing agent via POST /api/v1/characters/{agentId}/model.
         /// Also serves as retry when previous generation failed.
+        /// The server answers 202 with {characterId, modelStatus, rigged}; only ModelStatus is
+        /// populated on the result, the URLs and progress arrive through GetModelStatus.
         /// </summary>
         public IEnumerator GenerateModel(
             string agentId,
@@ -180,7 +232,7 @@ namespace Estuary
             string token = null;
             yield return ResolveToken(t => token = t);
 
-            var url = $"{_serverUrl}/api/generate/{agentId}/generate-model";
+            var url = _serverUrl + EstuaryRestRoutes.GenerateModel(agentId).Path;
 
             using (var request = new UnityWebRequest(url, "POST"))
             {
@@ -244,13 +296,15 @@ namespace Estuary
         /// <summary>
         /// Gets all agents/characters for the authenticated user via GET /api/agents.
         /// Returns a simple JSON array (no pagination).
+        /// Deliberately still on the legacy route: GET /api/v1/characters is paginated and its
+        /// items carry no modelProvider, which EstuaryModelLoader needs to orient the GLB.
         /// </summary>
         public IEnumerator GetAgents(Action<List<AgentResponse>> onSuccess, Action<string> onError)
         {
             string token = null;
             yield return ResolveToken(t => token = t);
 
-            var url = $"{_serverUrl}/api/agents";
+            var url = _serverUrl + EstuaryRestRoutes.GetAgents().Path;
 
             using (var request = UnityWebRequest.Get(url))
             {
@@ -279,15 +333,15 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Deletes an agent/character via DELETE /api/agents/{agentId}.
-        /// Returns 204 on success, 404 if not found or not owned by user.
+        /// Deletes an agent/character via DELETE /api/v1/characters/{agentId}.
+        /// Returns 200 on success (body ignored), 404 if not found or not owned by user.
         /// </summary>
         public IEnumerator DeleteAgent(string agentId, Action onSuccess, Action<string> onError)
         {
             string token = null;
             yield return ResolveToken(t => token = t);
 
-            var url = $"{_serverUrl}/api/agents/{agentId}";
+            var url = _serverUrl + EstuaryRestRoutes.DeleteAgent(agentId).Path;
 
             using (var request = UnityWebRequest.Delete(url))
             {

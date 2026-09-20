@@ -67,6 +67,9 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 | animation_stream | Not implemented | 📄 `enable_animation` auth flag exists, but `bot_animation` frames are dropped. Experimental, no reference impl in any SDK |
 | stt_config | Not applicable | 📄 STT runs entirely gateway-side (SCRUM-232) |
 | encounter | Not implemented | Lens-Studio-only at MVP per SDK_CONTRACT.md |
+| rest_canonical_routes (SCRUM-255) | Partial | 📄 `UploadImageToCharacter`, `GenerateModel`, `GetModelStatus`/`PollModelStatus`, `DeleteAgent` call `/api/v1/characters/...`. **`GetAgents` stays on legacy `GET /api/agents`**: the v1 list is paginated and has no `modelProvider`, which the model loader needs for GLB orientation |
+| client_identification (SCRUM-255) | Implemented | 📄 `X-Estuary-Client: estuary-unity-sdk/<EstuarySdkInfo.Version>` on every Estuary REST request (`ApplyAuth` + the simulation teardown DELETE). Never on `DownloadGlb` (third-party host) or on sockets |
+| rest_conformance_test (SCRUM-255) | Implemented | `Tests/Editor/RestConformanceTests.cs` checks `EstuaryRestRoutes` + `BuildHeaders` against the monorepo's `sdk-conformance/rest.json`; `SdkVersionTests.cs` fails if `EstuarySdkInfo.Version` drifts from `package.json` |
 
 ## Architecture
 
@@ -86,6 +89,8 @@ Runtime/
 |   +-- EstuaryConfig        - ScriptableObject configuration asset
 |   +-- EstuaryEvents        - Event definitions, enums, LiveKitTokenResponse
 |   +-- EstuaryHttpClient    - REST client (agents list, model generate/status, GLB download)
+|   +-- EstuaryRestRoutes    - Method + path of each EstuaryHttpClient call (test seam for sdk-conformance/rest.json)
+|   +-- EstuarySdkInfo       - SDK version constant (must equal package.json) + X-Estuary-Client header value
 |   +-- EstuarySimulationApi - REST client for /api/v1/simulation/* (worlds, instances, triggers, lore, world view)
 |   +-- EstuarySimulationStream - /sim-v1 Socket.IO namespace client (live conversation streaming)
 |   +-- ILiveKitVoiceManager - Interface for voice manager abstraction
