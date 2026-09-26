@@ -22,7 +22,7 @@ namespace Estuary.Editor
     {
         private const string LogPrefix = "[Estuary]";
         private const string LiveKitPackageId = "io.livekit.livekit-sdk";
-        private const string LiveKitGitUrl = "https://github.com/livekit/client-sdk-unity.git#v1.3.3";
+        private const string LiveKitGitUrl = "https://github.com/livekit/client-sdk-unity.git#v2.1.0";
         // Built-in module required by LiveKit's video sources (UnityEngine.ScreenCapture).
         private const string ScreenCaptureModuleId = "com.unity.modules.screencapture";
         private const string SessionKey = "Estuary_LiveKitCheckDone";

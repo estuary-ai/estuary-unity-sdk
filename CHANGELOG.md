@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the LiveKit Editor auto-installer to v2.1.0. LiveKit voice now requires Unity 2022.3 or newer.
+- Handle LiveKit v2.1.0 client disconnect callbacks once, preserving the local disconnect reason during voice teardown.
+
 ### Added
 
 - **Character Simulation (v1)**: run the Estuary simulation on your own characters

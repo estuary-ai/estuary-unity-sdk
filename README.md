@@ -24,9 +24,9 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 
 ## Requirements
 
-- Unity 2021.3 LTS or newer
+- Unity 2021.3 LTS or newer for text chat; Unity 2022.3 LTS or newer for LiveKit voice
 - .NET Standard 2.1 or .NET 4.x
-- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v2.0.0+
+- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v2.1.0+
 
 ## Installation
 
@@ -39,13 +39,15 @@ Unity Package Manager does not resolve transitive Git URL dependencies, so you m
 3. Select `Add package from git URL...`
 4. Add the **LiveKit SDK** first:
    ```
-   https://github.com/livekit/client-sdk-unity.git#v2.0.0
+   https://github.com/livekit/client-sdk-unity.git#v2.1.0
    ```
 5. Click `+` > `Add package from git URL...` again
 6. Add the **Estuary SDK**:
    ```
    https://github.com/Estuary-AI/estuary-unity-sdk.git
    ```
+
+If your project already has an older LiveKit version, update its Git URL in Package Manager to the v2.1.0 tag above.
 
 > **Auto-installer:** If you skip step 4, the SDK includes an Editor auto-installer that will detect the missing LiveKit dependency and offer to install it for you — along with the built-in `com.unity.modules.screencapture` module that LiveKit's video capture requires (without it you'd hit `The name 'ScreenCapture' does not exist` errors on a lean/URP project). Adding LiveKit first (as shown above) is still the recommended approach.
 

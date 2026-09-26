@@ -33,6 +33,10 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz by default
 
 ## Parity Status
 
+The optional LiveKit bot attribute `estuary.message_id` (2026-09-18) is not yet
+exposed by this SDK. Existing speaking-state behavior is unchanged; consumers may
+ignore the additive field. Swift uses it for per-turn local avatar playback.
+
 All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT.md are implemented. Web-debug-only events such as `turn_metrics` are intentionally not consumed.
 
 **Rows marked 📄 have substantial implementation notes in [`docs/PARITY_NOTES.md`](docs/PARITY_NOTES.md) — read the entry there before changing that feature.** Those notes record races that were actually hit and deliberate deviations from the other SDKs; the short note below is not sufficient context to change the behaviour safely.

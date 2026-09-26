@@ -315,12 +315,17 @@ namespace Estuary
                     _room = null;
                 }
 
+                // LiveKit 2.1 reports local disconnects synchronously through
+                // Room.Disconnected. Earlier installed versions need this fallback.
+                var disconnectReported = !IsConnected;
                 IsConnected = false;
-                var roomName = CurrentRoomName;
                 CurrentRoomName = null;
 
                 Log("Disconnected from LiveKit room");
-                DispatchToMainThread(() => OnDisconnected?.Invoke("client disconnect"));
+                if (!disconnectReported)
+                {
+                    DispatchToMainThread(() => OnDisconnected?.Invoke("client disconnect"));
+                }
             }
             catch (Exception e)
             {
@@ -949,6 +954,9 @@ namespace Estuary
             _room.Disconnected += (room) =>
             {
                 Log("Room disconnected");
+                var reason = room.DisconnectReason == DisconnectReason.ClientInitiated
+                    ? "client disconnect"
+                    : "room disconnected";
                 IsConnected = false;
                 CurrentRoomName = null;
                 // This Room instance is dead (e.g. the server deleted the room
@@ -963,7 +971,7 @@ namespace Estuary
                 {
                     _ = StopPublishingAsync();
                 }
-                DispatchToMainThread(() => OnDisconnected?.Invoke("room disconnected"));
+                DispatchToMainThread(() => OnDisconnected?.Invoke(reason));
             };
 
             _room.ConnectionStateChanged += (state) =>
