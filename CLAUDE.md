@@ -47,10 +47,10 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 | voice_websocket | Implemented | |
 | voice_livekit | Implemented | 📄 Requires LiveKit SDK. Warm-start token race + a bounded auto-unmute safety net for the first-chunk-muted race |
 | voice_push_to_talk | Implemented | 📄 Contract v1.11. Server-side turn handling on both transports; **six deliberate behaviours** incl. phantom-press suppression and transport-gated teardown |
-| interrupts | Implemented | |
+| interrupts | Implemented | 📄 Server-confirmed speech interrupts stop playback; no local microphone VAD |
 | audio_playback_tracking | Implemented | |
 | vision_camera | Implemented | 📄 Full VLM round-trip via `SendCameraImage(...)`; distinct from `EstuaryWebcam` continuous streaming |
-| client_action | Implemented | 📄 Contract v1.10. **Requires the `capabilities.client_action` opt-in** or the server serves the retired XML tag path |
+| client_action | Implemented | 📄 Typed action events; no XML text parsing or display-stripping switch |
 | video_streaming_livekit | Implemented | Requires LiveKit SDK |
 | video_streaming_websocket | Implemented | Via `WebcamVideoSource` fallback |
 | scene_graph | Implemented | |

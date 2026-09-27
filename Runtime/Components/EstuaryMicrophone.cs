@@ -47,15 +47,6 @@ namespace Estuary
         [Tooltip("Enable push-to-talk without a key binding — drive PushToTalkPress()/PushToTalkRelease() from your own input (touch/XR). Implied when a key is set.")]
         private bool pushToTalkEnabled = false;
 
-        [SerializeField]
-        [Tooltip("Enable voice activity detection (WebSocket mode only - LiveKit handles VAD server-side)")]
-        private bool useVoiceActivityDetection = false;
-
-        [SerializeField]
-        [Tooltip("Volume threshold for voice activity detection (0-1, WebSocket mode only)")]
-        [Range(0f, 1f)]
-        private float vadThreshold = 0.5f;
-
         [Header("Events")]
         [SerializeField]
         private UnityEvent onRecordingStarted = new UnityEvent();
@@ -65,12 +56,6 @@ namespace Estuary
 
         [SerializeField]
         private VolumeEvent onVolumeChanged = new VolumeEvent();
-
-        [SerializeField]
-        private UnityEvent onSpeechDetected = new UnityEvent();
-
-        [SerializeField]
-        private UnityEvent onSilenceDetected = new UnityEvent();
 
         #endregion
 
@@ -92,12 +77,6 @@ namespace Estuary
         /// Note: In LiveKit mode, volume monitoring is not available as audio goes directly through WebRTC.
         /// </summary>
         public float CurrentVolume { get; private set; }
-
-        /// <summary>
-        /// Whether speech is currently detected (WebSocket VAD mode only).
-        /// In LiveKit mode, VAD is handled server-side by Deepgram.
-        /// </summary>
-        public bool IsSpeechDetected { get; private set; }
 
         /// <summary>
         /// Target character for audio streaming.
@@ -168,16 +147,6 @@ namespace Estuary
         /// </summary>
         public event Action<float> OnVolumeChanged;
 
-        /// <summary>
-        /// Fired when speech is detected (WebSocket VAD mode only).
-        /// </summary>
-        public event Action OnSpeechDetected;
-
-        /// <summary>
-        /// Fired when silence is detected (WebSocket VAD mode only).
-        /// </summary>
-        public event Action OnSilenceDetected;
-
         #endregion
 
         #region Private Fields
@@ -187,18 +156,10 @@ namespace Estuary
         private int _lastSamplePosition;
         private float[] _sampleBuffer;
         private Coroutine _recordingCoroutine;
-        private bool _wasSpeaking;
 
         // LiveKit mode fields
         private ILiveKitVoiceManager _liveKitManager;
         private bool _useLiveKit;
-
-        // VAD-only fields for LiveKit mode (parallel Unity microphone capture)
-        private AudioClip _vadRecordingClip;
-        private float[] _vadBuffer;
-        private int _vadLastPosition;
-        private int _vadCoroutineSampleRate;
-        private Coroutine _vadCoroutine;
 
         // Push-to-talk state
         private bool _pttWasPressed;
@@ -308,11 +269,11 @@ namespace Estuary
 
             if (_useLiveKit)
             {
-                // Always tear down LiveKit publishing/VAD capture, even when
+                // Always tear down LiveKit publishing, even when
                 // IsRecording is already false — PTT's hot-mic fix leaves
                 // IsRecording=false as the steady (muted) state while the
-                // LiveKit publish handle and Unity's VAD mic capture are
-                // still live. Gating on IsRecording here would leak both.
+                // LiveKit publish handle is still live. Gating on IsRecording
+                // here would leak it.
                 if (_liveKitManager != null)
                 {
                     await StopLiveKitRecording();
@@ -580,17 +541,11 @@ namespace Estuary
                     Debug.Log("[EstuaryMicrophone] PTT mode: starting muted until first press");
                     await _liveKitManager.MuteAsync();
                     IsRecording = false;
-                    StartUnityMicrophoneForVAD();
                     return;
                 }
 
                 IsRecording = true;
                 Debug.Log("[EstuaryMicrophone] LiveKit microphone active (AEC enabled)");
-
-                // Also start Unity microphone capture for local VAD (voice activity detection)
-                // This runs in parallel with LiveKit's native capture, just for detecting user speech
-                // The audio isn't sent anywhere - it's only used to detect interrupts
-                StartUnityMicrophoneForVAD();
 
                 // Fire events
                 OnRecordingStarted?.Invoke();
@@ -599,144 +554,6 @@ namespace Estuary
             else
             {
                 Debug.LogError("[EstuaryMicrophone] Failed to start LiveKit microphone");
-            }
-        }
-
-        /// <summary>
-        /// Start Unity's microphone capture just for VAD (voice activity detection) in LiveKit mode.
-        /// This doesn't interfere with LiveKit's WebRTC capture - it runs in parallel.
-        /// The captured audio is only used to detect when the user is speaking, enabling client-side interrupts.
-        /// </summary>
-        private void StartUnityMicrophoneForVAD()
-        {
-            if (!useVoiceActivityDetection)
-            {
-                Debug.Log("[EstuaryMicrophone] VAD disabled in LiveKit mode - enable useVoiceActivityDetection for client-side interrupts");
-                return;
-            }
-
-            if (_vadRecordingClip != null)
-            {
-                Debug.Log("[EstuaryMicrophone] Unity microphone already running for VAD");
-                return;
-            }
-
-            try
-            {
-                // Use a lower sample rate for VAD-only capture (reduces CPU usage)
-                int vadSampleRate = 16000;
-                
-                // Get device - use empty string for default
-                string device = string.IsNullOrEmpty(microphoneDevice) ? null : microphoneDevice;
-                
-                // Create a short clip for VAD analysis (1 second buffer)
-                _vadRecordingClip = Microphone.Start(device, true, 1, vadSampleRate);
-                
-                if (_vadRecordingClip == null)
-                {
-                    Debug.LogWarning("[EstuaryMicrophone] Failed to start Unity microphone for VAD");
-                    return;
-                }
-
-                // Wait for microphone to initialize
-                int timeout = 0;
-                while (Microphone.GetPosition(device) <= 0 && timeout < 100)
-                {
-                    timeout++;
-                    System.Threading.Thread.Sleep(10);
-                }
-
-                if (Microphone.GetPosition(device) <= 0)
-                {
-                    Debug.LogWarning("[EstuaryMicrophone] Unity microphone didn't start in time for VAD");
-                    Microphone.End(device);
-                    _vadRecordingClip = null;
-                    return;
-                }
-
-                // Initialize VAD state
-                _vadCoroutineSampleRate = vadSampleRate;
-                _vadBuffer = new float[vadSampleRate / 10]; // 100ms buffer for VAD
-                _vadLastPosition = 0;
-                
-                // Start VAD processing coroutine
-                _vadCoroutine = StartCoroutine(ProcessVADCoroutine());
-                
-                Debug.Log("[EstuaryMicrophone] Started Unity microphone for VAD (parallel with LiveKit)");
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[EstuaryMicrophone] Error starting Unity microphone for VAD: {e.Message}");
-            }
-        }
-
-        private IEnumerator ProcessVADCoroutine()
-        {
-            string device = string.IsNullOrEmpty(microphoneDevice) ? null : microphoneDevice;
-            
-            while (_vadRecordingClip != null && _useLiveKit && IsRecording)
-            {
-                int currentPos = Microphone.GetPosition(device);
-                
-                if (currentPos > 0 && currentPos != _vadLastPosition)
-                {
-                    int samplesToRead = currentPos - _vadLastPosition;
-                    if (samplesToRead < 0) // Wrapped around
-                    {
-                        samplesToRead = _vadRecordingClip.samples - _vadLastPosition + currentPos;
-                    }
-                    
-                    if (samplesToRead > _vadBuffer.Length)
-                        samplesToRead = _vadBuffer.Length;
-                    
-                    // Read samples for VAD analysis
-                    _vadRecordingClip.GetData(_vadBuffer, _vadLastPosition % _vadRecordingClip.samples);
-                    _vadLastPosition = currentPos;
-                    
-                    // Calculate volume and check for speech
-                    float volume = AudioConverter.CalculateRMS(_vadBuffer);
-                    CurrentVolume = volume;
-                    OnVolumeChanged?.Invoke(volume);
-                    onVolumeChanged?.Invoke(volume);
-                    
-                    // Voice activity detection
-                    bool isSpeaking = volume > vadThreshold;
-                    
-                    if (isSpeaking && !_wasSpeaking)
-                    {
-                        IsSpeechDetected = true;
-                        OnSpeechDetected?.Invoke();
-                        onSpeechDetected?.Invoke();
-                        Debug.Log($"[EstuaryMicrophone] Speech detected in LiveKit mode (volume: {volume:F3})");
-                    }
-                    else if (!isSpeaking && _wasSpeaking)
-                    {
-                        IsSpeechDetected = false;
-                        OnSilenceDetected?.Invoke();
-                        onSilenceDetected?.Invoke();
-                    }
-                    
-                    _wasSpeaking = isSpeaking;
-                }
-                
-                yield return new WaitForSeconds(0.05f); // Check every 50ms
-            }
-        }
-
-        private void StopUnityMicrophoneForVAD()
-        {
-            if (_vadCoroutine != null)
-            {
-                StopCoroutine(_vadCoroutine);
-                _vadCoroutine = null;
-            }
-            
-            if (_vadRecordingClip != null && _useLiveKit)
-            {
-                string device = string.IsNullOrEmpty(microphoneDevice) ? null : microphoneDevice;
-                Microphone.End(device);
-                _vadRecordingClip = null;
-                Debug.Log("[EstuaryMicrophone] Stopped Unity microphone for VAD");
             }
         }
 
@@ -752,9 +569,6 @@ namespace Estuary
             // muted steady state), but events must only fire for a real
             // start->stop transition, not on every redundant teardown call.
             var wasRecording = IsRecording;
-
-            // Stop VAD microphone first
-            StopUnityMicrophoneForVAD();
 
             await _liveKitManager.StopPublishingAsync();
             IsRecording = false;
@@ -920,31 +734,6 @@ namespace Estuary
             CurrentVolume = AudioConverter.CalculateRMS(samples);
             OnVolumeChanged?.Invoke(CurrentVolume);
             onVolumeChanged?.Invoke(CurrentVolume);
-
-            // Voice activity detection (WebSocket mode only)
-            if (useVoiceActivityDetection)
-            {
-                var isSpeaking = CurrentVolume > vadThreshold;
-
-                if (isSpeaking && !_wasSpeaking)
-                {
-                    IsSpeechDetected = true;
-                    OnSpeechDetected?.Invoke();
-                    onSpeechDetected?.Invoke();
-                }
-                else if (!isSpeaking && _wasSpeaking)
-                {
-                    IsSpeechDetected = false;
-                    OnSilenceDetected?.Invoke();
-                    onSilenceDetected?.Invoke();
-                }
-
-                _wasSpeaking = isSpeaking;
-
-                // Don't send audio if no speech detected
-                if (!isSpeaking)
-                    return;
-            }
 
             // Push-to-talk gate (WebSocket mode) — _pttHeld is driven by the
             // key edges in Update() and by PushToTalkPress()/Release(), so

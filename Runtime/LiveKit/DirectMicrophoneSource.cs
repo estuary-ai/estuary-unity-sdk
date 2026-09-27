@@ -39,48 +39,9 @@ namespace Estuary
         private bool _disposed;
         private Coroutine _pollCoroutine;
         
-        // VAD (Voice Activity Detection) settings
-        private bool _vadEnabled = false;
-        private float _vadThreshold = 0.010f; // RMS threshold - tuned for near-field AR glasses
         private float _currentVolume;
-        private bool _wasSpeaking;
         
         public override event Action<float[], int, int> AudioRead;
-        
-        /// <summary>
-        /// Fired when speech is detected (volume crosses above threshold).
-        /// </summary>
-        public event Action OnSpeechDetected;
-        
-        /// <summary>
-        /// Fired when silence is detected (volume drops below threshold).
-        /// </summary>
-        public event Action OnSilenceDetected;
-        
-        /// <summary>
-        /// Enable/disable voice activity detection.
-        /// When enabled, only audio above the threshold is sent to LiveKit.
-        /// Audio below threshold is replaced with silence to filter ambient conversations.
-        /// </summary>
-        public bool VadEnabled 
-        { 
-            get => _vadEnabled; 
-            set => _vadEnabled = value; 
-        }
-        
-        /// <summary>
-        /// Volume threshold for VAD (0-1). Audio below this RMS level is treated as silence.
-        /// Default: 0.015 (1.5%). Increase to filter more aggressively.
-        /// Recommended values:
-        /// - 0.005-0.01: Very sensitive, picks up quiet speech
-        /// - 0.01-0.02: Good balance for AR glasses near-field
-        /// - 0.02-0.05: Aggressive filtering, requires speaking clearly
-        /// </summary>
-        public float VadThreshold 
-        { 
-            get => _vadThreshold; 
-            set => _vadThreshold = Mathf.Clamp01(value); 
-        }
         
         /// <summary>
         /// Current audio volume level (0-1). Useful for debugging/UI visualization.
@@ -349,33 +310,8 @@ namespace Estuary
 
             _lastReadPosition = currentPosition;
             
-            // Calculate volume for VAD (Voice Activity Detection)
+            // Keep the audio level available for diagnostics.
             _currentVolume = CalculateRMS(_audioDataBuffer, totalSamples);
-
-            // Apply VAD - filter out audio below threshold to prevent ambient conversations
-            if (_vadEnabled)
-            {
-                bool isSpeaking = _currentVolume >= _vadThreshold;
-
-                // Fire speech detection events on state change
-                if (isSpeaking && !_wasSpeaking)
-                {
-                    _wasSpeaking = true;
-                    OnSpeechDetected?.Invoke();
-                }
-                else if (!isSpeaking && _wasSpeaking)
-                {
-                    _wasSpeaking = false;
-                    OnSilenceDetected?.Invoke();
-                }
-
-                // If below threshold, replace audio with silence
-                // This prevents distant/ambient conversations from being sent to the server
-                if (!isSpeaking)
-                {
-                    Array.Clear(_audioDataBuffer, 0, totalSamples);
-                }
-            }
 
             // Fire the AudioRead event with 16kHz mono
             // We must pass an array sized exactly to the data length for LiveKit's native FFI
@@ -481,6 +417,5 @@ namespace Estuary
         }
     }
 }
-
 
 

@@ -15,7 +15,7 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 - **Vision (VLM)**: Send camera images for the character to "see" (`SendCameraImage`), and respond to the server's proactive capture requests (`OnCameraCaptureRequested`)
 - **Conversation Persistence**: Conversations are persisted per player-character pair
 - **Memory Push**: Receive newly extracted memories in real time after a conversation (`OnMemoryUpdated`)
-- **Action Parsing**: Parse XML-style action tags from bot responses (e.g., `<action name="wave" />`)
+- **Typed Actions**: Receive validated action events and route them to gameplay
 - **Session Lifecycle**: First-class handling of idle `session_timeout` / `voice_timeout` reaps and policy `session_rejected` (concurrent-session cap) — all with correct no-auto-reconnect suppression
 - **Device Capabilities**: Declare camera/mic/speaker availability per session so the character only offers tools the device supports
 - **World Model Integration**: Stream webcam video (LiveKit or WebSocket) for spatial awareness + scene-graph updates
@@ -187,11 +187,13 @@ Attach to any GameObject that should be an AI character.
 | `OnVoiceReceived` | Bot voice audio received |
 | `OnTranscript` | Speech-to-text result |
 | `OnInterrupt` | Interrupt signal received |
-| `OnActionReceived` | Action tag parsed from response |
+| `OnActionReceived` | Typed action event received |
 
 ### EstuaryMicrophone
 
 Captures microphone audio for voice chat.
+
+Speech detection and speech-triggered interrupts run on the server for LiveKit and WebSocket voice. The microphone sends continuous audio while unmuted, or only while held in push-to-talk mode. There is no local VAD setting.
 
 | Property | Description |
 |----------|-------------|
@@ -221,7 +223,7 @@ Works on both transports: LiveKit (track unmute/mute) and WebSocket (chunk gatin
 
 ### EstuaryAudioSource
 
-Plays bot voice audio responses.
+Plays bot voice audio responses. Server-confirmed interrupts stop playback; use `EstuaryCharacter.OnInterrupt` to respond.
 
 | Property | Description |
 |----------|-------------|
@@ -254,13 +256,9 @@ Fallback mode that streams audio over Socket.IO:
 config.VoiceMode = VoiceMode.WebSocket;
 ```
 
-## Action Parsing
+## Typed Actions
 
-Bot responses can include XML-style action tags:
-
-```xml
-Hello! <action name="wave" /> Nice to meet you!
-```
+Characters invoke declared actions through `client_action` events. The SDK negotiates this protocol automatically; XML tags in prose never execute. Actions fire on arrival, independently of TTS playback.
 
 Subscribe to action events:
 
@@ -279,7 +277,9 @@ character.OnActionReceived += (AgentAction action) =>
 };
 ```
 
-Action tags are automatically stripped from `CurrentPartialResponse` if `StripActionsFromText` is enabled.
+The server keeps legacy action tags out of response text on the typed action path.
+`EstuaryCharacter` passes response text through unchanged; use
+`ActionParser.StripActions` only when displaying text from an older source.
 
 ## World Model / Webcam Streaming
 

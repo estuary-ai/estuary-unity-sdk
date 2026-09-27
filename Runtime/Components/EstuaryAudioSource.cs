@@ -33,14 +33,6 @@ namespace Estuary
         [Tooltip("Expected sample rate from server (matches Unity's audio output rate)")]
         private int expectedSampleRate => AudioSettings.outputSampleRate;
 
-        [SerializeField]
-        [Tooltip("Stop playback when user starts speaking")]
-        private bool autoInterruptOnUserSpeech = true;
-
-        [SerializeField]
-        [Tooltip("Reference to microphone for interrupt detection")]
-        private EstuaryMicrophone microphoneRef;
-
         [Header("Events")]
         [SerializeField]
         private UnityEvent onPlaybackStarted = new UnityEvent();
@@ -177,23 +169,8 @@ namespace Estuary
             InitializeStreamingBuffer();
         }
 
-        private void OnEnable()
-        {
-            // Subscribe to microphone events for auto-interrupt
-            if (autoInterruptOnUserSpeech && microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected += HandleUserSpeechDetected;
-            }
-        }
-
         private void OnDisable()
         {
-            // Unsubscribe from microphone events
-            if (microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected -= HandleUserSpeechDetected;
-            }
-
             StopPlayback();
             CleanupStreamingBuffer();
         }
@@ -367,27 +344,6 @@ namespace Estuary
             if (_currentlyPlayingMessageId == messageId)
             {
                 StopPlayback();
-            }
-        }
-
-        /// <summary>
-        /// Set the microphone reference for auto-interrupt.
-        /// </summary>
-        /// <param name="microphone">Microphone component</param>
-        public void SetMicrophoneReference(EstuaryMicrophone microphone)
-        {
-            // Unsubscribe from old
-            if (microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected -= HandleUserSpeechDetected;
-            }
-
-            microphoneRef = microphone;
-
-            // Subscribe to new
-            if (autoInterruptOnUserSpeech && microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected += HandleUserSpeechDetected;
             }
         }
 
@@ -776,35 +732,6 @@ namespace Estuary
             catch (Exception e)
             {
                 Debug.LogWarning($"[EstuaryAudioSource] Failed to notify playback complete: {e.Message}");
-            }
-        }
-
-        private void HandleUserSpeechDetected()
-        {
-            if (autoInterruptOnUserSpeech && IsPlaying)
-            {
-                Debug.Log("[EstuaryAudioSource] User speech detected, interrupting playback and notifying server");
-                StopPlayback();
-                
-                // CRITICAL: Also notify the server to stop generating audio
-                // Without this, the server keeps generating TTS even though we stopped playback locally
-                NotifyServerInterrupt();
-            }
-        }
-
-        private async void NotifyServerInterrupt()
-        {
-            try
-            {
-                if (EstuaryManager.HasInstance && EstuaryManager.Instance.IsConnected)
-                {
-                    await EstuaryManager.Instance.NotifyInterruptAsync(CurrentMessageId);
-                    Debug.Log($"[EstuaryAudioSource] Notified server of interrupt (messageId: {CurrentMessageId ?? "none"})");
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[EstuaryAudioSource] Failed to notify server of interrupt: {e.Message}");
             }
         }
 

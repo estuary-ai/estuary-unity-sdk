@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Remove local microphone VAD settings, WebSocket silence gating, and duplicate LiveKit microphone capture. Server-confirmed speech drives automatic interrupts; push-to-talk still gates audio explicitly.
+- Remove `IsSpeechDetected`, `OnSpeechDetected`, `OnSilenceDetected`, and `EstuaryAudioSource.SetMicrophoneReference`, along with the microphone-based auto-interrupt Inspector setting. Use `EstuaryCharacter.OnTranscript` and `OnInterrupt` instead.
+- Remove the `EstuaryCharacter` **Strip Actions From Text** Inspector option and executable XML tag parsing. Response text passes through unchanged; `ActionParser.StripActions` remains available for legacy text.
 - Updated the LiveKit Editor auto-installer to v2.1.0. LiveKit voice now requires Unity 2022.3 or newer.
 - Handle LiveKit v2.1.0 client disconnect callbacks once, preserving the local disconnect reason during voice teardown.
 
