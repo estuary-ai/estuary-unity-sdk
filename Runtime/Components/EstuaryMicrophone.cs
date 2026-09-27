@@ -40,12 +40,12 @@ namespace Estuary
 
         [Header("Input Mode")]
         [SerializeField]
-        [Tooltip("Key to hold for push-to-talk mode (None = always on when recording)")]
-        private KeyCode pushToTalkKey = KeyCode.None;
+        [Tooltip("Enable push-to-talk. Assign a key below or drive PushToTalkPress()/PushToTalkRelease() from your own input (touch/XR).")]
+        private bool pushToTalkEnabled = false;
 
         [SerializeField]
-        [Tooltip("Enable push-to-talk without a key binding — drive PushToTalkPress()/PushToTalkRelease() from your own input (touch/XR). Implied when a key is set.")]
-        private bool pushToTalkEnabled = false;
+        [Tooltip("Key to hold while push-to-talk is enabled (None = use your own input). Ignored when push-to-talk is disabled.")]
+        private KeyCode pushToTalkKey = KeyCode.None;
 
         [Header("Events")]
         [SerializeField]
@@ -103,8 +103,8 @@ namespace Estuary
         public bool IsLiveKitMode => _useLiveKit;
 
         /// <summary>
-        /// Key held for push-to-talk (None = no key binding). Setting a key
-        /// enables push-to-talk mode. README-documented public API.
+        /// Key held for push-to-talk (None = no key binding). Only used when
+        /// <see cref="PushToTalkEnabled"/> is true.
         /// </summary>
         public KeyCode PushToTalkKey
         {
@@ -113,7 +113,7 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Enables push-to-talk without a key binding — drive
+        /// Enables push-to-talk. With no key binding, drive
         /// PushToTalkPress()/PushToTalkRelease() from your own input.
         /// </summary>
         public bool PushToTalkEnabled
@@ -122,8 +122,8 @@ namespace Estuary
             set => pushToTalkEnabled = value;
         }
 
-        /// <summary>Whether push-to-talk is active for this mic (key bound OR explicitly enabled).</summary>
-        public bool IsPushToTalkMode => pushToTalkEnabled || pushToTalkKey != KeyCode.None;
+        /// <summary>Whether push-to-talk is enabled for this mic.</summary>
+        public bool IsPushToTalkMode => pushToTalkEnabled;
 
         /// <summary>Whether the push-to-talk button is currently held.</summary>
         public bool IsPushToTalkHeld => _pttHeld;
@@ -183,7 +183,7 @@ namespace Estuary
         {
             // Push-to-talk key edges (both transports). Programmatic callers
             // use PushToTalkPress()/PushToTalkRelease() directly.
-            if (pushToTalkKey != KeyCode.None)
+            if (IsPushToTalkMode && pushToTalkKey != KeyCode.None)
             {
                 var isPressed = Input.GetKey(pushToTalkKey);
 
@@ -778,9 +778,6 @@ namespace Estuary
         #endregion
     }
 }
-
-
-
 
 
 

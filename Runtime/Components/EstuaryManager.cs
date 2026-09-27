@@ -158,6 +158,24 @@ namespace Estuary
         /// </summary>
         public event EstuaryEvents.ErrorHandler OnError;
 
+        /// <summary>Fired on receipt of DelegationUpdate on the main thread.</summary>
+        public event Action<DelegationUpdate> OnDelegationUpdate;
+
+        /// <summary>Fired on receipt of ApiEndpointResult on the main thread.</summary>
+        public event Action<ApiEndpointResult> OnApiEndpointResult;
+
+        /// <summary>Fired on receipt of ModerationWarning on the main thread.</summary>
+        public event Action<ModerationWarning> OnModerationWarning;
+
+        /// <summary>Fired on receipt of ModerationFlag on the main thread.</summary>
+        public event Action<ModerationFlag> OnModerationFlag;
+
+        /// <summary>Fired on receipt of ServerError on the main thread.</summary>
+        public event Action<ServerError> OnServerError;
+
+        /// <summary>LiveKit bot state and optional owning utterance ID; not a playback clock.</summary>
+        public event Action<BotSpeakingState> OnBotSpeakingStateChanged;
+
         /// <summary>
         /// Fired when LiveKit connection state changes.
         /// </summary>
@@ -516,14 +534,14 @@ namespace Estuary
         /// <summary>
         /// Notify the server that audio playback has completed.
         /// </summary>
-        public async Task NotifyAudioPlaybackCompleteAsync()
+        public async Task NotifyAudioPlaybackCompleteAsync(string messageId = null)
         {
             if (_client == null || !_client.IsConnected)
             {
                 return;
             }
 
-            await _client.NotifyAudioPlaybackCompleteAsync();
+            await _client.NotifyAudioPlaybackCompleteAsync(messageId);
         }
 
         /// <summary>
@@ -805,6 +823,11 @@ namespace Estuary
             };
 
             // Subscribe to client events
+            _client.OnDelegationUpdate += HandleDelegationUpdate;
+            _client.OnApiEndpointResult += HandleApiEndpointResult;
+            _client.OnModerationWarning += HandleModerationWarning;
+            _client.OnModerationFlag += HandleModerationFlag;
+            _client.OnServerError += HandleServerError;
             _client.OnSessionConnected += HandleSessionConnected;
             _client.OnDisconnected += HandleDisconnected;
             _client.OnBotResponse += HandleBotResponse;
@@ -838,6 +861,8 @@ namespace Estuary
                 _liveKitManager.SetCoroutineRunner(this);
 
                 // Subscribe to LiveKit manager events
+                if (_liveKitManager is ILiveKitBotStateSource stateSource)
+                    stateSource.OnBotSpeakingStateChanged += HandleBotSpeakingStateChanged;
                 _liveKitManager.OnConnected += HandleLiveKitConnected;
                 _liveKitManager.OnDisconnected += HandleLiveKitDisconnected;
                 _liveKitManager.OnError += HandleLiveKitManagerError;
@@ -856,6 +881,8 @@ namespace Estuary
             // Cleanup LiveKit manager
             if (_liveKitManager != null)
             {
+                if (_liveKitManager is ILiveKitBotStateSource stateSource)
+                    stateSource.OnBotSpeakingStateChanged -= HandleBotSpeakingStateChanged;
                 _liveKitManager.OnConnected -= HandleLiveKitConnected;
                 _liveKitManager.OnDisconnected -= HandleLiveKitDisconnected;
                 _liveKitManager.OnError -= HandleLiveKitManagerError;
@@ -866,6 +893,11 @@ namespace Estuary
 
             if (_client != null)
             {
+                _client.OnDelegationUpdate -= HandleDelegationUpdate;
+                _client.OnApiEndpointResult -= HandleApiEndpointResult;
+                _client.OnModerationWarning -= HandleModerationWarning;
+                _client.OnModerationFlag -= HandleModerationFlag;
+                _client.OnServerError -= HandleServerError;
                 _client.OnSessionConnected -= HandleSessionConnected;
                 _client.OnDisconnected -= HandleDisconnected;
                 _client.OnBotResponse -= HandleBotResponse;
@@ -927,6 +959,48 @@ namespace Estuary
         #endregion
 
         #region Event Handlers
+
+        private void HandleDelegationUpdate(DelegationUpdate data)
+        {
+            _activeCharacter?.HandleDelegationUpdate(data);
+            OnDelegationUpdate?.Invoke(data);
+        }
+
+        private void HandleApiEndpointResult(ApiEndpointResult data)
+        {
+            _activeCharacter?.HandleApiEndpointResult(data);
+            OnApiEndpointResult?.Invoke(data);
+        }
+
+        private void HandleModerationWarning(ModerationWarning data)
+        {
+            if (data.IsTerminated) _liveKitManager?.MuteBotAudio(true);
+            _activeCharacter?.HandleModerationWarning(data);
+            OnModerationWarning?.Invoke(data);
+        }
+
+        private void HandleModerationFlag(ModerationFlag data)
+        {
+            // Use audio/message tracking, never the asynchronous participant attribute hint.
+            var audioMessageId = _activeCharacter?.CurrentMessageId;
+            if (_liveKitManager != null && _liveKitManager.IsConnected &&
+                !string.IsNullOrEmpty(data.MessageId) && data.MessageId == audioMessageId)
+                _ = _liveKitManager.SignalInterruptAsync(data.MessageId);
+            _activeCharacter?.HandleModerationFlag(data);
+            OnModerationFlag?.Invoke(data);
+        }
+
+        private void HandleServerError(ServerError data)
+        {
+            _activeCharacter?.HandleServerError(data);
+            OnServerError?.Invoke(data);
+        }
+
+        private void HandleBotSpeakingStateChanged(BotSpeakingState data)
+        {
+            _activeCharacter?.HandleBotSpeakingStateChanged(data);
+            OnBotSpeakingStateChanged?.Invoke(data);
+        }
 
         private void HandleSessionConnected(SessionInfo sessionInfo)
         {

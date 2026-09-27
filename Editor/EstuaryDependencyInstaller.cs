@@ -32,6 +32,9 @@ namespace Estuary.Editor
 
         static EstuaryDependencyInstaller()
         {
+            // Optional integrations must never trigger a dialog or install during CI/tests.
+            if (Application.isBatchMode) return;
+
             if (SessionState.GetBool(SessionKey, false))
                 return;
 
@@ -77,14 +80,13 @@ namespace Estuary.Editor
             }
 
             Debug.LogWarning($"{LogPrefix} LiveKit SDK ({LiveKitPackageId}) is not installed. " +
-                "The Estuary SDK requires it for compilation.");
+                "WebSocket voice remains available without it.");
 
             var install = EditorUtility.DisplayDialog(
                 "Estuary SDK — Missing Dependency",
-                "The Estuary SDK requires the LiveKit Unity SDK (io.livekit.livekit-sdk) " +
-                "but it is not installed.\n\n" +
-                "Without it, the Estuary runtime assembly cannot compile and you will see " +
-                "errors about missing types (SessionInfo, BotResponse, etc.).\n\n" +
+                "Install the optional LiveKit Unity SDK (io.livekit.livekit-sdk) " +
+                "to enable WebRTC voice.\n\n" +
+                "The Estuary SDK compiles and supports WebSocket voice without LiveKit.\n\n" +
                 "Would you like to install it now?",
                 "Install LiveKit SDK",
                 "Not Now");

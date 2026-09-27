@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using Newtonsoft.Json;
 
 namespace Estuary.Models
 {
@@ -10,26 +11,32 @@ namespace Estuary.Models
     /// NOTE: unlike most wire events (which are snake_case), MemoryData uses
     /// camelCase keys, matching the server's Memory.to_dict().
     /// </summary>
-    [Serializable]
+    [Serializable, JsonObject(MemberSerialization.OptIn)]
     public class MemoryData
     {
-        [SerializeField] private string id;
-        [SerializeField] private string userId;
-        [SerializeField] private string agentId;
-        [SerializeField] private string playerId;
-        [SerializeField] private string content;
-        [SerializeField] private string memoryType;
-        [SerializeField] private float confidence;
-        [SerializeField] private string status;
-        [SerializeField] private string sourceConversationId;
-        [SerializeField] private string sourceQuote;
-        [SerializeField] private string source;
-        [SerializeField] private string lastAccessedAt;
-        [SerializeField] private int accessCount;
-        [SerializeField] private string extractedAt;
-        [SerializeField] private string createdAt;
-        [SerializeField] private string updatedAt;
+        [SerializeField, JsonProperty("id")] private string id;
+        [SerializeField, JsonProperty("userId")] private string userId;
+        [SerializeField, JsonProperty("agentId")] private string agentId;
+        [SerializeField, JsonProperty("playerId")] private string playerId;
+        [SerializeField, JsonProperty("content")] private string content;
+        [SerializeField, JsonProperty("memoryType")] private string memoryType;
+        [SerializeField, JsonProperty("confidence")] private float confidence;
+        [SerializeField, JsonProperty("status")] private string status;
+        [SerializeField, JsonProperty("sourceConversationId")] private string sourceConversationId;
+        [SerializeField, JsonProperty("sourceQuote")] private string sourceQuote;
+        [SerializeField, JsonProperty("source")] private string source;
+        [SerializeField, JsonProperty("lastAccessedAt")] private string lastAccessedAt;
+        [SerializeField, JsonProperty("accessCount")] private int accessCount;
+        [SerializeField, JsonProperty("extractedAt")] private string extractedAt;
+        [SerializeField, JsonProperty("createdAt")] private string createdAt;
+        [SerializeField, JsonProperty("updatedAt")] private string updatedAt;
 
+        [SerializeField, JsonProperty("importance")] private float importance;
+        [SerializeField, JsonProperty("memoryLayer")] private string memoryLayer;
+        [SerializeField, JsonProperty("sourceMessageTimestamp")] private string sourceMessageTimestamp;
+        public float Importance => importance;
+        public string MemoryLayer => memoryLayer;
+        public string SourceMessageTimestamp => sourceMessageTimestamp;
         public string Id => id;
         public string UserId => userId;
         public string AgentId => agentId;

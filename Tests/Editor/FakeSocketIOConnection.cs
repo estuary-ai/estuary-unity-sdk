@@ -38,7 +38,10 @@ namespace Estuary.Tests
             return Task.CompletedTask;
         }
 
-        public void On(string eventName, Action<string> handler) { }
+        private readonly Dictionary<string, Action<string>> _handlers = new Dictionary<string, Action<string>>();
+        public void On(string eventName, Action<string> handler) => _handlers[eventName] = handler;
+        public void Receive(string eventName, string json) => _handlers[eventName](json);
+        public void ServerDisconnect(string reason = "server disconnect") => OnDisconnected?.Invoke(reason);
 
         public void Dispose() { }
     }

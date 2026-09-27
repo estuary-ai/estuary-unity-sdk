@@ -106,7 +106,10 @@ namespace Estuary.Utilities
         /// </summary>
         /// <param name="text">The text containing action tags</param>
         /// <returns>Text with all action tags removed</returns>
-        public static string StripActions(string text)
+        public static string StripActions(string text) => StripActions(text, false);
+
+        /// <summary>Remove tags while optionally preserving whitespace at streaming chunk boundaries.</summary>
+        public static string StripActions(string text, bool preserveWhitespace)
         {
             if (string.IsNullOrEmpty(text))
             {
@@ -115,6 +118,7 @@ namespace Estuary.Utilities
 
             // Remove action tags and clean up extra whitespace
             var result = ActionPattern.Replace(text, "");
+            if (preserveWhitespace) return result;
             
             // Clean up multiple consecutive spaces
             result = Regex.Replace(result, @"\s{2,}", " ");

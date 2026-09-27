@@ -33,11 +33,10 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz by default
 
 ## Parity Status
 
-The optional LiveKit bot attribute `estuary.message_id` (2026-09-18) is not yet
-exposed by this SDK. Existing speaking-state behavior is unchanged; consumers may
-ignore the additive field. Swift uses it for per-turn local avatar playback.
-
-All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT.md are implemented. Web-debug-only events such as `turn_metrics` are intentionally not consumed.
+The implemented contract surface includes the required conversation features and the optional
+features listed below. Audio2Face (`bot_animation`) is explicitly excluded from this parity
+pass. Encounter remains Lens-only at MVP; debug metrics and niche batch/document management
+remain deliberate SDK exclusions.
 
 **Rows marked 📄 have substantial implementation notes in [`docs/PARITY_NOTES.md`](docs/PARITY_NOTES.md) — read the entry there before changing that feature.** Those notes record races that were actually hit and deliberate deviations from the other SDKs; the short note below is not sufficient context to change the behaviour safely.
 
@@ -46,11 +45,11 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 | text_chat | Implemented | Full parity |
 | voice_websocket | Implemented | |
 | voice_livekit | Implemented | 📄 Requires LiveKit SDK. Warm-start token race + a bounded auto-unmute safety net for the first-chunk-muted race |
-| voice_push_to_talk | Implemented | 📄 Contract v1.11. Server-side turn handling on both transports; **six deliberate behaviours** incl. phantom-press suppression and transport-gated teardown |
+| voice_push_to_talk | Implemented | 📄 Contract v1.11. Server-side turn handling on both transports; checkbox controls PTT regardless of a stored key; **six deliberate behaviours** incl. phantom-press suppression and transport-gated teardown |
 | interrupts | Implemented | 📄 Server-confirmed speech interrupts stop playback; no local microphone VAD |
-| audio_playback_tracking | Implemented | |
+| audio_playback_tracking | Implemented | Final packet + local render deadline; message-correlated completion; disconnect clears pending PCM |
 | vision_camera | Implemented | 📄 Full VLM round-trip via `SendCameraImage(...)`; distinct from `EstuaryWebcam` continuous streaming |
-| client_action | Implemented | 📄 Typed action events; no XML text parsing or display-stripping switch |
+| client_action | Implemented | 📄 Contract v1.10. **Requires the `capabilities.client_action` opt-in** or the server serves the retired XML tag path |
 | video_streaming_livekit | Implemented | Requires LiveKit SDK |
 | video_streaming_websocket | Implemented | Via `WebcamVideoSource` fallback |
 | scene_graph | Implemented | |
@@ -64,11 +63,17 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 | session_rejected | Implemented | 📄 Same suppression flag as session_timeout, else it reconnect-loops into the cap |
 | character_model_loading | Implemented | 📄 Optional glTFast dependency; provider-aware orientation offset (Tripo GLBs face -X) |
 | simulation (v1) | Implemented | 📄 REST + `/sim-v1` stream. Stream requires an API key; scheduled events do not stream |
-| simulation motives | Implemented | 📄 Contract v1.7 |
-| moderation events | Not implemented | 📄 Documented gap, contract v1.14. Ignoring is safe by design |
+| simulation motives | Implemented | 📄 Seed motive on AddCharacter + per-instance SetCharacterMotive |
+| moderation events | Implemented | 📄 Warning/termination, scoped redaction, late-content filtering, both reconnect layers suppressed |
 | input_limits / rate_limited | No SDK change required | 📄 Contract v1.13, server-side and backward compatible. Do **not** auto-retry if surfaced |
+| delegation_update / api_endpoint_result | Implemented | Main-thread typed events; correlation IDs, progress, media and citations retained |
+| LiveKit bot attributes | Implemented | Optional ILiveKitBotStateSource exposes state + estuary.message_id; never used as a local playback clock |
+| canonical REST / client identification | Implemented | X-Estuary-Client on every API request; GetAgents retains its documented unpaginated legacy exception |
+| REST management | Implemented | Character CRUD/transfer/motive/tool test/uploads; conversations; memory reads/writes/search; shares; single/streaming HTTP turns |
+| rigged model generation / clips | Implemented | rigged option, all stages and partial-success fallbacks; EstuaryClipPlayer exact/unique-suffix action mapping |
+| REST conformance | Implemented | Shared fixtures replayed through public methods and the actual HTTP transport seam |
 | turn_metrics | Not consumed | Web-debug only |
-| animation_stream | Not implemented | 📄 `enable_animation` auth flag exists, but `bot_animation` frames are dropped. Experimental, no reference impl in any SDK |
+| animation_stream | Not implemented | 📄 `enable_animation` auth flag exists, but `bot_animation` frames are dropped. Audio2Face excluded from this implementation; existing opt-in unchanged |
 | stt_config | Not applicable | 📄 STT runs entirely gateway-side (SCRUM-232) |
 | encounter | Not implemented | Lens-Studio-only at MVP per SDK_CONTRACT.md |
 
@@ -84,12 +89,12 @@ Runtime/
 |   +-- EstuaryWebcam        - Video streaming (LiveKit or WebSocket)
 |   +-- EstuaryModelLoader   - Downloads a character's GLB and instantiates it as a GameObject
 |   +-- EstuarySimulation    - Simulation v1: REST + /sim-v1 live stream for one world instance
-|   +-- EstuaryActionManager - Dispatches named action bindings (typed client_action events + dormant legacy XML tags)
+|   +-- EstuaryActionManager - Dispatches named action bindings (typed client_action events only)
 +-- Core/                # Low-level client logic (no LiveKit dependency)
 |   +-- EstuaryClient        - Socket.IO v4 client (manual protocol impl)
 |   +-- EstuaryConfig        - ScriptableObject configuration asset
 |   +-- EstuaryEvents        - Event definitions, enums, LiveKitTokenResponse
-|   +-- EstuaryHttpClient    - REST client (agents list, model generate/status, GLB download)
+|   +-- EstuaryHttpClient    - REST client (characters, generation, conversations, memories, shares, HTTP turns)
 |   +-- EstuarySimulationApi - REST client for /api/v1/simulation/* (worlds, instances, triggers, lore, world view)
 |   +-- EstuarySimulationStream - /sim-v1 Socket.IO namespace client (live conversation streaming)
 |   +-- ILiveKitVoiceManager - Interface for voice manager abstraction
@@ -143,6 +148,11 @@ OnVoiceTimeout(VoiceTimeoutData)      // Server voice-idle release; socket stays
 OnCameraCaptureRequested(CameraCaptureRequest) // Server asks for an image — respond with SendCameraImage(...)
 OnMemoryUpdated(MemoryUpdatedEvent)   // Newly extracted memories pushed after a conversation ends
 OnSessionRejected(SessionRejectedData) // Policy cap hit (e.g. concurrent-session limit); disconnect follows, no auto-reconnect
+OnDelegationUpdate(DelegationUpdate) // Task progress and authorization URL (app decides how to present it)
+OnApiEndpointResult(ApiEndpointResult) // Structured media/citations, separate from prose
+OnModerationWarning(ModerationWarning) // Termination suppresses auto-reconnect until explicit Connect
+OnModerationFlag(ModerationFlag)       // Redact matching UI history/media by MessageId
+OnServerError(ServerError)            // Code + Message, without automatic retry
 OnClientAction(ClientActionEvent)     // Typed in-world action (contract v1.9); character layer re-fires it as OnActionReceived(AgentAction)
 ```
 

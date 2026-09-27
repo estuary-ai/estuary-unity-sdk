@@ -1,0 +1,12 @@
+{
+    "name": "Estuary.LiveKit.Tests",
+    "rootNamespace": "Estuary.Tests",
+    "references": ["Estuary", "Estuary.LiveKit"],
+    "includePlatforms": ["Editor"],
+    "autoReferenced": false,
+    "defineConstraints": ["UNITY_INCLUDE_TESTS", "ESTUARY_LIVEKIT"],
+    "versionDefines": [
+        { "name": "io.livekit.livekit-sdk", "expression": "", "define": "ESTUARY_LIVEKIT" }
+    ],
+    "optionalUnityReferences": ["TestAssemblies"]
+}

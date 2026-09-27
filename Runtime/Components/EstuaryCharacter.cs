@@ -73,7 +73,7 @@ namespace Estuary
         private ErrorEvent onError = new ErrorEvent();
 
         [SerializeField]
-        [Tooltip("Fired when the character performs an in-world action (typed client_action event, or a legacy tag parsed from bot response text)")]
+        [Tooltip("Fired when the character performs an in-world action (typed client_action event)")]
         private ActionReceivedEvent onActionReceived = new ActionReceivedEvent();
 
         [SerializeField]
@@ -100,6 +100,11 @@ namespace Estuary
         [Tooltip("Fired when the server rejects the connection due to a policy cap (disconnect follows; no auto-reconnect)")]
         private SessionRejectedEvent onSessionRejected = new SessionRejectedEvent();
 
+        [SerializeField] private DelegationUpdateEvent onDelegationUpdate = new DelegationUpdateEvent();
+        [SerializeField] private ApiEndpointResultEvent onApiEndpointResult = new ApiEndpointResultEvent();
+        [SerializeField] private ModerationWarningEvent onModerationWarning = new ModerationWarningEvent();
+        [SerializeField] private ModerationFlagEvent onModerationFlag = new ModerationFlagEvent();
+        [SerializeField] private ServerErrorEvent onServerError = new ServerErrorEvent();
         #endregion
 
         #region Properties
@@ -172,9 +177,29 @@ namespace Estuary
         // though the socket layer behaved. Cleared on explicit Connect().
         private bool _serverEndedSession;
 
+        private string _textMessageId;
+
         #endregion
 
         #region C# Events
+
+        /// <summary>Fired on receipt of DelegationUpdate on the main thread.</summary>
+        public event Action<DelegationUpdate> OnDelegationUpdate;
+
+        /// <summary>Fired on receipt of ApiEndpointResult on the main thread.</summary>
+        public event Action<ApiEndpointResult> OnApiEndpointResult;
+
+        /// <summary>Fired on receipt of ModerationWarning on the main thread.</summary>
+        public event Action<ModerationWarning> OnModerationWarning;
+
+        /// <summary>Fired on receipt of ModerationFlag on the main thread.</summary>
+        public event Action<ModerationFlag> OnModerationFlag;
+
+        /// <summary>Fired on receipt of ServerError on the main thread.</summary>
+        public event Action<ServerError> OnServerError;
+
+        /// <summary>LiveKit bot state and owning utterance ID; attributes are not a local playback clock.</summary>
+        public event Action<BotSpeakingState> OnBotSpeakingStateChanged;
 
         /// <summary>
         /// Fired when session is connected.
@@ -667,6 +692,11 @@ namespace Estuary
 
         internal void HandleDisconnected(string reason)
         {
+            audioSource?.StopPlayback();
+            ReleaseLocalVoiceState();
+            CurrentPartialResponse = "";
+            CurrentMessageId = null;
+            _textMessageId = null;
             IsConnected = false;
             CurrentSession = null;
             IsVoiceSessionActive = false;
@@ -683,8 +713,7 @@ namespace Estuary
             // with nobody talking, in a loop. Resume requires explicit Connect().
             if (_serverEndedSession)
             {
-                _serverEndedSession = false;
-                Debug.Log($"[EstuaryCharacter] Server ended the session (idle timeout) — skipping auto-reconnect. Call Connect() to resume.");
+                Debug.Log("[EstuaryCharacter] Server ended the session — call Connect() to resume.");
             }
             else if (autoReconnect && reason != "client disconnect")
             {
@@ -695,20 +724,26 @@ namespace Estuary
 
         internal void HandleBotResponse(BotResponse response)
         {
-            if (!string.IsNullOrEmpty(response.MessageId))
+            if (_textMessageId != response.MessageId)
             {
-                CurrentMessageId = response.MessageId;
+                CurrentPartialResponse = "";
+                _textMessageId = response.MessageId;
             }
+            if (!string.IsNullOrEmpty(response.MessageId)) CurrentMessageId = response.MessageId;
 
+            // Handle streaming responses
             if (response.IsFinal)
             {
+                // Final response - use full text
                 CurrentPartialResponse = response.Text;
             }
             else
             {
+                // Partial response - accumulate
                 CurrentPartialResponse += response.Text;
             }
 
+            // Invoke events with the server response
             OnBotResponse?.Invoke(response);
             onBotResponse?.Invoke(response);
         }
@@ -858,6 +893,47 @@ namespace Estuary
             onCameraCaptureRequested?.Invoke(request);
         }
 
+        internal void HandleDelegationUpdate(DelegationUpdate data)
+        {
+            OnDelegationUpdate?.Invoke(data);
+            onDelegationUpdate?.Invoke(data);
+        }
+
+        internal void HandleApiEndpointResult(ApiEndpointResult data)
+        {
+            OnApiEndpointResult?.Invoke(data);
+            onApiEndpointResult?.Invoke(data);
+        }
+
+        internal void HandleModerationWarning(ModerationWarning data)
+        {
+            if (data.IsTerminated)
+            {
+                _serverEndedSession = true;
+                audioSource?.StopPlayback();
+                ReleaseLocalVoiceState();
+            }
+            OnModerationWarning?.Invoke(data);
+            onModerationWarning?.Invoke(data);
+        }
+
+        internal void HandleModerationFlag(ModerationFlag data)
+        {
+            audioSource?.RedactMessage(data.MessageId);
+            if (_textMessageId == data.MessageId)
+                CurrentPartialResponse = data.Message ?? "";
+            OnModerationFlag?.Invoke(data);
+            onModerationFlag?.Invoke(data);
+        }
+
+        internal void HandleServerError(ServerError data)
+        {
+            OnServerError?.Invoke(data);
+            onServerError?.Invoke(data);
+        }
+
+        internal void HandleBotSpeakingStateChanged(BotSpeakingState data) => OnBotSpeakingStateChanged?.Invoke(data);
+
         internal void HandleMemoryUpdated(MemoryUpdatedEvent data)
         {
             Debug.Log($"[EstuaryCharacter] Memory updated: {data}");
@@ -877,8 +953,9 @@ namespace Estuary
         internal void HandleClientAction(ClientActionEvent data)
         {
             // Typed action delivery (client_action, contract v1.10) — supersedes
-            // legacy XML tags. Fires the existing action callbacks, so
-            // integrators (e.g. EstuaryActionManager) see no API change.
+            // the legacy XML <action .../> tags parsed out of bot_response
+            // text. Fires the SAME action callbacks as the legacy parse path,
+            // so integrators (e.g. EstuaryActionManager) see no API change.
             // Fire-on-arrival: not synchronized to TTS playback.
             var action = data.ToAgentAction();
 
@@ -928,6 +1005,12 @@ namespace Estuary
         [Serializable]
         public class SessionConnectedEvent : UnityEvent<SessionInfo> { }
 
+        [Serializable] public class DelegationUpdateEvent : UnityEvent<DelegationUpdate> { }
+        [Serializable] public class ApiEndpointResultEvent : UnityEvent<ApiEndpointResult> { }
+        [Serializable] public class ModerationWarningEvent : UnityEvent<ModerationWarning> { }
+        [Serializable] public class ModerationFlagEvent : UnityEvent<ModerationFlag> { }
+        [Serializable] public class ServerErrorEvent : UnityEvent<ServerError> { }
+
         [Serializable]
         public class BotResponseEvent : UnityEvent<BotResponse> { }
 
@@ -966,7 +1049,6 @@ namespace Estuary
         #endregion
     }
 }
-
 
 
 

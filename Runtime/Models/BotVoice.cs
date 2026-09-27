@@ -16,6 +16,10 @@ namespace Estuary.Models
         [SerializeField] private bool isInterjection;
         [SerializeField] private float timestamp;
         [SerializeField] private bool isLiveKit;
+        [SerializeField] private bool isFinal;
+
+        /// <summary>True on the end-of-audio packet, which may have no audio bytes.</summary>
+        public bool IsFinal => isFinal;
 
         /// <summary>
         /// Base64-encoded audio data.
@@ -80,13 +84,14 @@ namespace Estuary.Models
 
         public BotVoice() { }
 
-        public BotVoice(string audio, int sampleRate = 16000, string messageId = null, int chunkIndex = 0, float timestamp = 0f)
+        public BotVoice(string audio, int sampleRate = 16000, string messageId = null, int chunkIndex = 0, float timestamp = 0f, bool isFinal = false)
         {
             this.audio = audio;
             this.sampleRate = sampleRate;
             this.messageId = messageId;
             this.chunkIndex = chunkIndex;
             this.timestamp = timestamp;
+            this.isFinal = isFinal;
         }
 
         /// <summary>
@@ -114,7 +119,8 @@ namespace Estuary.Models
                 messageId = response.message_id,
                 isInterjection = response.is_interjection,
                 timestamp = response.timestamp,
-                isLiveKit = response.is_livekit
+                isLiveKit = response.is_livekit,
+                isFinal = response.is_final
             };
         }
 
@@ -134,6 +140,7 @@ namespace Estuary.Models
             public bool is_interjection;
             public float timestamp;
             public bool is_livekit;
+            public bool is_final;
         }
     }
 }

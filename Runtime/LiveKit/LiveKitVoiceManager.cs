@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using UnityEngine;
+using Estuary.Models;
 
 using LiveKit;
 using LiveKit.Proto;
@@ -15,8 +16,13 @@ namespace Estuary
     /// Handles room connections, audio track publishing, and audio track subscription.
     /// Implements ILiveKitVoiceManager for use by core components via LiveKitBridge.
     /// </summary>
-    public class LiveKitVoiceManager : ILiveKitVoiceManager
+    public class LiveKitVoiceManager : ILiveKitVoiceManager, ILiveKitBotStateSource
     {
+        /// <summary>Latest bot attributes. Null before a bot is observed or after room teardown.</summary>
+        public BotSpeakingState CurrentBotSpeakingState { get; private set; }
+        /// <summary>Bot speaking/idle state with optional utterance identity, dispatched on the main thread.</summary>
+        public event Action<BotSpeakingState> OnBotSpeakingStateChanged;
+
         #region Events
 
         /// <summary>
@@ -288,6 +294,7 @@ namespace Estuary
             }
 
             IsConnected = true;
+            foreach (var participant in _room.RemoteParticipants.Values) HandleBotAttributes(participant);
             Log($"Connected to LiveKit room: {CurrentRoomName}");
             _connectTcs?.TrySetResult(true);
             DispatchToMainThread(() => OnConnected?.Invoke(CurrentRoomName));
@@ -320,6 +327,7 @@ namespace Estuary
                 var disconnectReported = !IsConnected;
                 IsConnected = false;
                 CurrentRoomName = null;
+                CurrentBotSpeakingState = null;
 
                 Log("Disconnected from LiveKit room");
                 if (!disconnectReported)
@@ -610,6 +618,11 @@ namespace Estuary
                 return;
             }
 
+            // Late moderation/interrupt events for an older turn must not mute a newer one.
+            if (!string.IsNullOrEmpty(messageId) && !string.IsNullOrEmpty(_currentMessageId) &&
+                messageId != _currentMessageId)
+                return;
+
             // Validate: Only process interrupt if there's something to interrupt
             var interruptedId = messageId ?? _currentMessageId;
             if (string.IsNullOrEmpty(interruptedId) && interruptedAt <= 0f)
@@ -868,12 +881,29 @@ namespace Estuary
 
         #region Private Methods
 
+        private void HandleBotAttributes(Participant participant)
+        {
+            if (participant.Identity == null || !participant.Identity.StartsWith("bot-", StringComparison.Ordinal)) return;
+            var room = _room;
+            var data = BotSpeakingState.FromAttributes(participant.Identity, participant.Attributes);
+            if (data == null) return;
+            DispatchToMainThread(() =>
+            {
+                if (!IsConnected || _room != room) return;
+                CurrentBotSpeakingState = data;
+                OnBotSpeakingStateChanged?.Invoke(data);
+            });
+        }
+
         private void SetupRoomEventHandlers()
         {
             if (_room == null) return;
 
+            _room.ParticipantAttributesChanged += HandleBotAttributes;
+
             _room.ParticipantConnected += (participant) =>
             {
+                HandleBotAttributes(participant);
                 Log($"Participant connected: {participant.Identity}");
                 DispatchToMainThread(() => OnParticipantConnected?.Invoke(participant.Identity));
             };
@@ -959,6 +989,7 @@ namespace Estuary
                     : "room disconnected";
                 IsConnected = false;
                 CurrentRoomName = null;
+                CurrentBotSpeakingState = null;
                 // This Room instance is dead (e.g. the server deleted the room
                 // during a voice_timeout / idle reap) — drop it so the next
                 // ConnectAsync creates a fresh Room instead of reusing a

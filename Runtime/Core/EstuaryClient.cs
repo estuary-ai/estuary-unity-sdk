@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using Estuary.Models;
+using Newtonsoft.Json;
 
 namespace Estuary
 {
@@ -26,6 +27,21 @@ namespace Estuary
         #endregion
 
         #region Events
+
+        /// <summary>Fired on receipt of DelegationUpdate on the main thread.</summary>
+        public event Action<DelegationUpdate> OnDelegationUpdate;
+
+        /// <summary>Fired on receipt of ApiEndpointResult on the main thread.</summary>
+        public event Action<ApiEndpointResult> OnApiEndpointResult;
+
+        /// <summary>Fired on receipt of ModerationWarning on the main thread.</summary>
+        public event Action<ModerationWarning> OnModerationWarning;
+
+        /// <summary>Fired on receipt of ModerationFlag on the main thread.</summary>
+        public event Action<ModerationFlag> OnModerationFlag;
+
+        /// <summary>Fired on receipt of ServerError on the main thread.</summary>
+        public event Action<ServerError> OnServerError;
 
         /// <summary>
         /// Fired when successfully connected and session is established.
@@ -232,11 +248,12 @@ namespace Estuary
 
         private CancellationTokenSource _cancellationTokenSource;
         private int _reconnectAttempts;
+        private readonly ConcurrentDictionary<string, byte> _redactedMessages = new ConcurrentDictionary<string, byte>();
         private bool _disposed;
         private bool _isVoiceModeActive;
-        // Set by session_timeout: suppresses the auto-reconnect for the
-        // server-initiated disconnect that immediately follows it.
-        private bool _serverEndedSession;
+        // Session timeout, rejection or moderation termination requires explicit reconnect.
+        private volatile bool _serverEndedSession;
+        private int _sessionGeneration;
 
         // Queue for main thread dispatching
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
@@ -294,6 +311,7 @@ namespace Estuary
             if (_disposed) return;
 
             _cancellationTokenSource?.Cancel();
+            Interlocked.Increment(ref _sessionGeneration);
 
             if (_socket != null)
             {
@@ -429,11 +447,10 @@ namespace Estuary
         }
 
         /// <summary>
-        /// Update session-level preferences on the server.
+        /// Deprecated compatibility no-op. Vision acknowledgments are managed automatically.
         /// </summary>
         /// <param name="enableVisionAcknowledgment">
-        /// When true, the character verbally acknowledges when it looks at the
-        /// camera (e.g. "let me take a look").
+        /// Retained for source compatibility; ignored by the server.
         /// </param>
         public async Task UpdatePreferencesAsync(bool enableVisionAcknowledgment)
         {
@@ -473,7 +490,7 @@ namespace Estuary
         /// <summary>
         /// Notify the server that audio playback has completed.
         /// </summary>
-        public async Task NotifyAudioPlaybackCompleteAsync()
+        public async Task NotifyAudioPlaybackCompleteAsync(string messageId = null)
         {
             if (!IsConnected)
             {
@@ -481,7 +498,8 @@ namespace Estuary
                 return;
             }
 
-            await _socket.EmitAsync("audio_playback_complete", null);
+            await _socket.EmitAsync("audio_playback_complete",
+                string.IsNullOrEmpty(messageId) ? null : new ClientInterruptPayload { message_id = messageId });
             Log("Notified audio playback complete");
         }
 
@@ -747,6 +765,12 @@ namespace Estuary
 
         private async Task ConnectInternalAsync()
         {
+            var previousSocket = _socket;
+            _socket = null;
+            previousSocket?.Dispose();
+            Interlocked.Increment(ref _sessionGeneration);
+            _cancellationTokenSource?.Cancel();
+            _cancellationTokenSource?.Dispose();
             SetState(ConnectionState.Connecting);
             _cancellationTokenSource = new CancellationTokenSource();
 
@@ -755,43 +779,7 @@ namespace Estuary
                 // Create socket connection
                 _socket = CreateSocketConnection();
 
-                // Set up event handlers
-                _socket.OnConnected += HandleConnected;
-                _socket.OnDisconnected += HandleDisconnected;
-                _socket.OnError += HandleError;
-                _socket.On("session_info", HandleSessionInfo);
-                _socket.On("bot_response", HandleBotResponse);
-                _socket.On("bot_voice", HandleBotVoice);
-                _socket.On("stt_response", HandleSttResponse);
-                _socket.On("interrupt", HandleInterruptEvent);
-                _socket.On("auth_error", HandleAuthError);
-                _socket.On("error", HandleServerError);
-
-                // LiveKit event handlers
-                _socket.On("livekit_token", HandleLiveKitToken);
-                _socket.On("livekit_ready", HandleLiveKitReady);
-                _socket.On("livekit_error", HandleLiveKitError);
-
-                // Voice mode event handlers
-                _socket.On("voice_started", HandleVoiceStarted);
-                _socket.On("voice_stopped", HandleVoiceStopped);
-                _socket.On("voice_error", HandleVoiceError);
-
-                // Quota event handler
-                _socket.On("quota_exceeded", HandleQuotaExceeded);
-                _socket.On("session_timeout", HandleSessionTimeout);
-                _socket.On("voice_timeout", HandleVoiceTimeout);
-
-                // World model event handlers
-                _socket.On("scene_graph_update", HandleSceneGraphUpdate);
-                _socket.On("room_identified", HandleRoomIdentified);
-
-                // Vision, memory, action, and session-policy event handlers
-                _socket.On("camera_capture", HandleCameraCaptureRequest);
-                _socket.On("memory_updated", HandleMemoryUpdated);
-                _socket.On("motive_updated", HandleMotiveUpdated);
-                _socket.On("client_action", HandleClientAction);
-                _socket.On("session_rejected", HandleSessionRejected);
+                RegisterSocketHandlers();
 
                 // Connect WITH auth - Socket.IO v4 passes auth in the namespace connect message
                 var auth = new AuthenticateData
@@ -831,8 +819,7 @@ namespace Estuary
         /// client_action is forced rather than merely defaulted because it is a
         /// statement about the SDK, not the app. The server treats its absence as
         /// "legacy client" and falls back to the retired XML &lt;action&gt; tag path
-        /// (SDK_CONTRACT v1.10), where this build's dormant ActionParser is the
-        /// only thing that would catch an action. Copies rather than mutating, so
+        /// (SDK_CONTRACT v1.10). XML tags are stripped but never executed. Copies rather than mutating, so
         /// an integrator's shared SessionCapabilities instance is left alone.
         /// </summary>
         private SessionCapabilities BuildCapabilitiesPayload()
@@ -853,6 +840,100 @@ namespace Estuary
         private object BuildTurnModePayload() =>
             SessionTurnMode == TurnMode.PushToTalk ? (object)new TurnModePayload() : null;
 
+        private bool IsRedacted(string messageId) =>
+            !string.IsNullOrEmpty(messageId) && _redactedMessages.ContainsKey(messageId);
+
+        private void ReceiveEvent<T>(string json, Action<T> handler, bool content = false)
+        {
+            try
+            {
+                var data = JsonConvert.DeserializeObject<T>(json);
+                if (data != null)
+                {
+                    if (content) DispatchContentToMainThread(() => handler(data));
+                    else DispatchToMainThread(() => handler(data));
+                }
+            }
+            catch (Exception e) { LogError($"Invalid {typeof(T).Name}: {e.Message}"); }
+        }
+
+        private void HandleModerationWarning(string json)
+        {
+            try
+            {
+                var data = JsonConvert.DeserializeObject<ModerationWarning>(json);
+                if (data == null) return;
+                // Set synchronously: the trailing disconnect can arrive before Update pumps the queue.
+                if (data.IsTerminated) _serverEndedSession = true;
+                DispatchToMainThread(() => OnModerationWarning?.Invoke(data));
+            }
+            catch (Exception e) { LogError($"Invalid moderation_warning: {e.Message}"); }
+        }
+
+        private void HandleModerationFlag(string json)
+        {
+            try
+            {
+                var data = JsonConvert.DeserializeObject<ModerationFlag>(json);
+                if (data == null || string.IsNullOrEmpty(data.MessageId)) return;
+                _redactedMessages.TryAdd(data.MessageId, 0);
+                DispatchToMainThread(() => OnModerationFlag?.Invoke(data));
+            }
+            catch (Exception e) { LogError($"Invalid moderation_flag: {e.Message}"); }
+        }
+
+        private void RegisterSocketHandlers()
+        {
+            var socket = _socket;
+            bool IsCurrent() => !_disposed && ReferenceEquals(_socket, socket);
+            void Register(string name, Action<string> handler)
+                => socket.On(name, json => { if (IsCurrent()) handler(json); });
+
+            socket.OnConnected += () => { if (IsCurrent()) HandleConnected(); };
+            socket.OnDisconnected += reason => { if (IsCurrent()) HandleDisconnected(reason); };
+            socket.OnError += error => { if (IsCurrent()) HandleError(error); };
+            Register("session_info", HandleSessionInfo);
+            Register("bot_response", HandleBotResponse);
+            Register("bot_voice", HandleBotVoice);
+            Register("stt_response", HandleSttResponse);
+            Register("interrupt", HandleInterruptEvent);
+            Register("auth_error", HandleAuthError);
+            Register("error", HandleServerError);
+
+            // LiveKit event handlers
+            Register("livekit_token", HandleLiveKitToken);
+            Register("livekit_ready", HandleLiveKitReady);
+            Register("livekit_error", HandleLiveKitError);
+
+            // Voice mode event handlers
+            Register("voice_started", HandleVoiceStarted);
+            Register("voice_stopped", HandleVoiceStopped);
+            Register("voice_error", HandleVoiceError);
+
+            // Quota event handler
+            Register("quota_exceeded", HandleQuotaExceeded);
+            Register("session_timeout", HandleSessionTimeout);
+            Register("voice_timeout", HandleVoiceTimeout);
+
+            // World model event handlers
+            Register("scene_graph_update", HandleSceneGraphUpdate);
+            Register("room_identified", HandleRoomIdentified);
+
+            // Vision, memory, action, and session-policy event handlers
+            Register("camera_capture", HandleCameraCaptureRequest);
+            Register("memory_updated", HandleMemoryUpdated);
+            Register("motive_updated", HandleMotiveUpdated);
+            Register("client_action", HandleClientAction);
+            Register("session_rejected", HandleSessionRejected);
+
+            Register("delegation_update", json => ReceiveEvent<DelegationUpdate>(json, data =>
+                { if (!IsRedacted(data.MessageId)) OnDelegationUpdate?.Invoke(data); }, content: true));
+            Register("api_endpoint_result", json => ReceiveEvent<ApiEndpointResult>(json, data =>
+                { if (!IsRedacted(data.MessageId)) OnApiEndpointResult?.Invoke(data); }, content: true));
+            Register("moderation_warning", HandleModerationWarning);
+            Register("moderation_flag", HandleModerationFlag);
+        }
+
         private ISocketIOConnection CreateSocketConnection()
         {
             // In production, replace this with actual SocketIOClient:
@@ -869,7 +950,9 @@ namespace Estuary
         /// </summary>
         internal void AttachSocketForTest(ISocketIOConnection socket)
         {
+            Interlocked.Increment(ref _sessionGeneration);
             _socket = socket;
+            RegisterSocketHandlers();
             SetState(ConnectionState.Connected);
         }
 
@@ -929,6 +1012,7 @@ namespace Estuary
         private void HandleDisconnected(string reason)
         {
             Log($"Socket disconnected: {reason}");
+            Interlocked.Increment(ref _sessionGeneration);
             SetState(ConnectionState.Disconnected);
             CurrentSession = null;
             // Backend voice mode dies with the socket; if this stayed true, the
@@ -946,7 +1030,6 @@ namespace Estuary
             {
                 _ = HandleReconnect();
             }
-            _serverEndedSession = false;
         }
 
         private void HandleError(string error)
@@ -960,6 +1043,8 @@ namespace Estuary
             try
             {
                 var sessionInfo = SessionInfo.FromJson(json);
+                Interlocked.Increment(ref _sessionGeneration);
+                _redactedMessages.Clear();
                 CurrentSession = sessionInfo;
                 SetState(ConnectionState.Connected);
                 Log($"Session established: {sessionInfo}");
@@ -991,7 +1076,7 @@ namespace Estuary
             {
                 var response = BotResponse.FromJson(json);
                 Log($"Received bot_response: {response}");
-                DispatchToMainThread(() => OnBotResponse?.Invoke(response));
+                DispatchContentToMainThread(() => { if (!IsRedacted(response.MessageId)) OnBotResponse?.Invoke(response); });
             }
             catch (Exception e)
             {
@@ -1013,7 +1098,7 @@ namespace Estuary
                 Log($"Parsing bot_voice JSON (length={json.Length}): {json.Substring(0, Math.Min(200, json.Length))}...");
                 var voice = BotVoice.FromJson(json);
                 Log($"Received bot_voice: {voice}, HasSubscribers={OnBotVoice != null}");
-                DispatchToMainThread(() => OnBotVoice?.Invoke(voice));
+                DispatchContentToMainThread(() => { if (!IsRedacted(voice.MessageId)) OnBotVoice?.Invoke(voice); });
             }
             catch (Exception e)
             {
@@ -1084,32 +1169,11 @@ namespace Estuary
         
         private void HandleServerError(string json)
         {
-            try
+            ReceiveEvent<ServerError>(json, data =>
             {
-                var errorMsg = "Server error";
-                if (!string.IsNullOrEmpty(json))
-                {
-                    // Simple JSON parsing for {"message": "..."}
-                    var msgStart = json.IndexOf("\"message\"");
-                    if (msgStart >= 0)
-                    {
-                        var valueStart = json.IndexOf(':', msgStart) + 1;
-                        var valueEnd = json.IndexOf('"', json.IndexOf('"', valueStart) + 1);
-                        var textStart = json.IndexOf('"', valueStart) + 1;
-                        if (textStart > 0 && valueEnd > textStart)
-                        {
-                            errorMsg = json.Substring(textStart, valueEnd - textStart);
-                        }
-                    }
-                }
-                
-                LogError($"Server error: {errorMsg}");
-                DispatchToMainThread(() => OnError?.Invoke(errorMsg));
-            }
-            catch (Exception e)
-            {
-                LogError($"Failed to parse error: {e.Message}");
-            }
+                OnServerError?.Invoke(data);
+                OnError?.Invoke(data.Message ?? data.Code ?? "Server error");
+            });
         }
 
         private void HandleLiveKitToken(string json)
@@ -1421,7 +1485,7 @@ namespace Estuary
             {
                 var data = ClientActionEvent.FromJson(json);
                 Log($"Received client_action: {data}");
-                DispatchToMainThread(() => OnClientAction?.Invoke(data));
+                DispatchContentToMainThread(() => { if (!IsRedacted(data.MessageId)) OnClientAction?.Invoke(data); });
             }
             catch (Exception e)
             {
@@ -1458,7 +1522,7 @@ namespace Estuary
 
         private async Task HandleReconnect()
         {
-            if (_disposed || _cancellationTokenSource?.IsCancellationRequested == true)
+            if (_disposed || _serverEndedSession || _cancellationTokenSource?.IsCancellationRequested == true)
                 return;
 
             if (_reconnectAttempts >= MAX_RECONNECT_ATTEMPTS)
@@ -1472,9 +1536,10 @@ namespace Estuary
             SetState(ConnectionState.Reconnecting);
             Log($"Reconnecting... attempt {_reconnectAttempts}/{MAX_RECONNECT_ATTEMPTS}");
 
+            int generation = _sessionGeneration;
             await Task.Delay(RECONNECT_DELAY_MS * _reconnectAttempts);
 
-            if (_disposed || _cancellationTokenSource?.IsCancellationRequested == true)
+            if (generation != _sessionGeneration || _disposed || _serverEndedSession || _cancellationTokenSource?.IsCancellationRequested == true)
                 return;
 
             await ConnectInternalAsync();
@@ -1487,6 +1552,15 @@ namespace Estuary
                 State = newState;
                 DispatchToMainThread(() => OnConnectionStateChanged?.Invoke(newState));
             }
+        }
+
+        private void DispatchContentToMainThread(Action action)
+        {
+            int generation = _sessionGeneration;
+            DispatchToMainThread(() =>
+            {
+                if (!_disposed && generation == _sessionGeneration && IsConnected && !_serverEndedSession) action();
+            });
         }
 
         private void DispatchToMainThread(Action action)
@@ -1521,9 +1595,6 @@ namespace Estuary
 
             if (_socket != null)
             {
-                _socket.OnConnected -= HandleConnected;
-                _socket.OnDisconnected -= HandleDisconnected;
-                _socket.OnError -= HandleError;
                 _socket.Dispose();
                 _socket = null;
             }
