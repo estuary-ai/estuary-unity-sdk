@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Raise the minimum Unity version to 2022.3 to match LiveKit SDK 2.1.0.
 - Remove the `EstuaryCharacter` **Strip Actions From Text** Inspector option. Typed `client_action` events handle actions, and response text now passes through unchanged. `ActionParser.StripActions` remains available for legacy text.
 - Make `PushToTalkEnabled` the sole PTT switch. The Inspector disables `PushToTalkKey` while PTT is off, and runtime ignores a previously assigned key; existing key-only scenes must enable the checkbox.
 - Remove local microphone VAD settings, WebSocket silence gating, and duplicate LiveKit microphone capture. Server-confirmed speech now drives automatic interrupts; push-to-talk still gates audio explicitly.

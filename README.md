@@ -24,7 +24,7 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 
 ## Requirements
 
-- Unity 2021.3 LTS or newer for text chat; Unity 2022.3 LTS or newer for LiveKit voice
+- Unity 2022.3 LTS or newer
 - .NET Standard 2.1 or .NET 4.x
 - [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v2.1.0+
 
