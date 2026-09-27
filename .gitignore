@@ -5,3 +5,11 @@ EstuaryConfig.asset
 EstuaryConfig.asset.meta
 Runtime/EstuaryConfig.asset
 Runtime/EstuaryConfig.asset.meta
+
+# Local agent instructions and memory
+/.claude/
+/.claude.meta
+/AGENTS.md
+/AGENTS.md.meta
+/CLAUDE.md
+/CLAUDE.md.meta
