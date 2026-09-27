@@ -38,34 +38,32 @@ features listed below. Audio2Face (`bot_animation`) is explicitly excluded from 
 pass. Encounter remains Lens-only at MVP; debug metrics and niche batch/document management
 remain deliberate SDK exclusions.
 
-**Rows marked 📄 have substantial implementation notes in [`docs/PARITY_NOTES.md`](docs/PARITY_NOTES.md) — read the entry there before changing that feature.** Those notes record races that were actually hit and deliberate deviations from the other SDKs; the short note below is not sufficient context to change the behaviour safely.
-
 | Feature | Status | Note |
 |---|---|---|
 | text_chat | Implemented | Full parity |
 | voice_websocket | Implemented | |
-| voice_livekit | Implemented | 📄 Requires LiveKit SDK. Warm-start token race + a bounded auto-unmute safety net for the first-chunk-muted race |
-| voice_push_to_talk | Implemented | 📄 Contract v1.11. Server-side turn handling on both transports; checkbox controls PTT regardless of a stored key; **six deliberate behaviours** incl. phantom-press suppression and transport-gated teardown |
-| interrupts | Implemented | 📄 Server-confirmed speech interrupts stop playback; no local microphone VAD |
+| voice_livekit | Implemented | Requires LiveKit SDK. Warm-start token race + a bounded auto-unmute safety net for the first-chunk-muted race |
+| voice_push_to_talk | Implemented | Contract v1.11. Checkbox controls PTT regardless of a stored key; presses require an active voice session, LiveKit starts muted, and teardown releases a held turn |
+| interrupts | Implemented | Server-confirmed speech interrupts stop playback; no local microphone VAD |
 | audio_playback_tracking | Implemented | Final packet + local render deadline; message-correlated completion; disconnect clears pending PCM |
-| vision_camera | Implemented | 📄 Full VLM round-trip via `SendCameraImage(...)`; distinct from `EstuaryWebcam` continuous streaming |
-| client_action | Implemented | 📄 Contract v1.10. **Requires the `capabilities.client_action` opt-in** or the server serves the retired XML tag path |
+| vision_camera | Implemented | Full VLM round-trip via `SendCameraImage(...)`; distinct from `EstuaryWebcam` continuous streaming |
+| client_action | Implemented | Contract v1.10. **Requires the `capabilities.client_action` opt-in** or the server serves the retired XML tag path |
 | video_streaming_livekit | Implemented | Requires LiveKit SDK |
 | video_streaming_websocket | Implemented | Via `WebcamVideoSource` fallback |
 | scene_graph | Implemented | |
 | device_pose | Implemented | |
-| preferences | Implemented | 📄 Server currently treats `enableVisionAcknowledgment` as a no-op; kept for contract parity |
-| session_capabilities | Implemented | 📄 `client_action` is forced true on a copy so integrator config can't drop the session onto the retired path |
+| preferences | Implemented | Server currently treats `enableVisionAcknowledgment` as a no-op; kept for contract parity |
+| session_capabilities | Implemented | `client_action` is forced true on a copy so integrator config can't drop the session onto the retired path |
 | memory_push | Implemented | Matches TS/Python |
-| motive_push | Implemented | 📄 Contract v1.7. Legacy `/api/agents` LIST omits motive by design — expect null |
-| voice_timeout | Implemented | 📄 Socket stays open, text keeps working. Never wire into reconnect suppression |
-| session_timeout | Implemented | 📄 Suppressed at **every** reconnect-owning layer — socket-layer alone is insufficient (Lens lesson 7/8) |
-| session_rejected | Implemented | 📄 Same suppression flag as session_timeout, else it reconnect-loops into the cap |
-| character_model_loading | Implemented | 📄 Optional glTFast dependency; provider-aware orientation offset (Tripo GLBs face -X) |
-| simulation (v1) | Implemented | 📄 REST + `/sim-v1` stream. Stream requires an API key; scheduled events do not stream |
-| simulation motives | Implemented | 📄 Seed motive on AddCharacter + per-instance SetCharacterMotive |
-| moderation events | Implemented | 📄 Warning/termination, scoped redaction, late-content filtering, both reconnect layers suppressed |
-| input_limits / rate_limited | No SDK change required | 📄 Contract v1.13, server-side and backward compatible. Do **not** auto-retry if surfaced |
+| motive_push | Implemented | Contract v1.7. Legacy `/api/agents` LIST omits motive by design — expect null |
+| voice_timeout | Implemented | Socket stays open, text keeps working. Never wire into reconnect suppression |
+| session_timeout | Implemented | Suppressed at **every** reconnect-owning layer — socket-layer alone is insufficient (Lens lesson 7/8) |
+| session_rejected | Implemented | Same suppression flag as session_timeout, else it reconnect-loops into the cap |
+| character_model_loading | Implemented | Optional glTFast dependency; provider-aware orientation offset (Tripo GLBs face -X) |
+| simulation (v1) | Implemented | REST + `/sim-v1` stream. Stream requires an API key; scheduled events do not stream |
+| simulation motives | Implemented | Seed motive on AddCharacter + per-instance SetCharacterMotive |
+| moderation events | Implemented | Warning/termination, scoped redaction, late-content filtering, both reconnect layers suppressed |
+| input_limits / rate_limited | No SDK change required | Contract v1.13, server-side and backward compatible. Do **not** auto-retry if surfaced |
 | delegation_update / api_endpoint_result | Implemented | Main-thread typed events; correlation IDs, progress, media and citations retained |
 | LiveKit bot attributes | Implemented | Optional ILiveKitBotStateSource exposes state + estuary.message_id; never used as a local playback clock |
 | canonical REST / client identification | Implemented | X-Estuary-Client on every API request; GetAgents retains its documented unpaginated legacy exception |
@@ -73,8 +71,8 @@ remain deliberate SDK exclusions.
 | rigged model generation / clips | Implemented | rigged option, all stages and partial-success fallbacks; EstuaryClipPlayer exact/unique-suffix action mapping |
 | REST conformance | Implemented | Shared fixtures replayed through public methods and the actual HTTP transport seam |
 | turn_metrics | Not consumed | Web-debug only |
-| animation_stream | Not implemented | 📄 `enable_animation` auth flag exists, but `bot_animation` frames are dropped. Audio2Face excluded from this implementation; existing opt-in unchanged |
-| stt_config | Not applicable | 📄 STT runs entirely gateway-side (SCRUM-232) |
+| animation_stream | Not implemented | `enable_animation` auth flag exists, but `bot_animation` frames are dropped. Audio2Face excluded from this implementation; existing opt-in unchanged |
+| stt_config | Not applicable | STT runs entirely gateway-side (SCRUM-232) |
 | encounter | Not implemented | Lens-Studio-only at MVP per SDK_CONTRACT.md |
 
 ## Architecture
@@ -182,5 +180,5 @@ carries `capabilities` (from EstuaryConfig `deviceHas*` toggles) and `enable_ani
 ## Documentation Maintenance
 
 - When modifying SDK features, installation steps, or dependencies: update both `README.md` and `estuary-docs/docs/unity-sdk/` docs to keep them in sync
-- **When a feature's behaviour changes, update its entry in `docs/PARITY_NOTES.md`, not just the status table in this file.** The table is the index; the notes are the record of why each feature works the way it does. A status flip with no note update loses the rationale.
+- When a feature's behaviour changes, keep the parity status table above and the relevant public docs accurate.
 - LiveKit is an **optional** dependency -- the SDK works for text-only chat without it. The auto-installer prompts users to install it on first import.
