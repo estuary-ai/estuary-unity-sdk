@@ -39,6 +39,7 @@ All `REQUIRED` features and the applicable `OPTIONAL` features from SDK_CONTRACT
 
 | Feature | Status | Note |
 |---|---|---|
+| guardrail_visibility | Not implemented | OPTIONAL contract v1.35 `guardrail_event` is safely ignored. No approved audio/text should be cleared and no interrupt sent for this event. Typed callback integration awaits Unity validation; history is exposed through the public character REST endpoint. |
 | text_chat | Implemented | Full parity |
 | voice_websocket | Implemented | |
 | voice_livekit | Implemented | 📄 Requires LiveKit SDK. Warm-start token race + a bounded auto-unmute safety net for the first-chunk-muted race |
