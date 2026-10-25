@@ -13,7 +13,6 @@ namespace Estuary
         static void Register()
         {
             LiveKitBridge.RegisterVoiceManagerFactory(() => new LiveKitVoiceManager());
-            LiveKitBridge.RegisterVideoManagerFactory(() => new LiveKitVideoManager());
             Debug.Log("[Estuary] LiveKit integration registered");
         }
     }

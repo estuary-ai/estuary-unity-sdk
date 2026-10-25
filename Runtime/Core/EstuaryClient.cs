@@ -136,16 +136,6 @@ namespace Estuary
         public event EstuaryEvents.VoiceTimeoutHandler OnVoiceTimeout;
 
         /// <summary>
-        /// Fired when a scene graph update is received from the world model.
-        /// </summary>
-        public event EstuaryEvents.SceneGraphUpdateHandler OnSceneGraphUpdate;
-
-        /// <summary>
-        /// Fired when a room is identified by the world model.
-        /// </summary>
-        public event EstuaryEvents.RoomIdentifiedHandler OnRoomIdentified;
-
-        /// <summary>
         /// Fired when the server proactively requests a camera image (it detected
         /// vision intent). Capture a frame and reply via SendCameraImageAsync with
         /// the request's RequestId.
@@ -681,7 +671,6 @@ namespace Estuary
 
         /// <summary>
         /// Emit a custom event to the server.
-        /// Used by world model components to send video frames, poses, etc.
         /// </summary>
         /// <param name="eventName">Event name</param>
         /// <param name="data">Event data (must be serializable)</param>
@@ -695,50 +684,6 @@ namespace Estuary
 
             await _socket.EmitAsync(eventName, data);
             Log($"Emitted {eventName}");
-        }
-
-        /// <summary>
-        /// Enable LiveKit video streaming for world model.
-        /// When enabled, video frames sent via LiveKit will be forwarded to the world model.
-        /// </summary>
-        /// <param name="sessionId">World model session ID</param>
-        /// <param name="targetFps">Target FPS for video processing (default 10)</param>
-        public async Task EnableLiveKitVideoAsync(string sessionId, int targetFps = 10)
-        {
-            if (!IsConnected)
-            {
-                LogError("Cannot enable LiveKit video: not connected");
-                return;
-            }
-
-            var payload = new EnableLiveKitVideoPayload
-            {
-                sessionId = sessionId,
-                targetFps = targetFps
-            };
-            await _socket.EmitAsync("enable_livekit_video", payload);
-            Log($"Enabled LiveKit video for session {sessionId}");
-        }
-
-        /// <summary>
-        /// Disable LiveKit video streaming for world model.
-        /// </summary>
-        public async Task DisableLiveKitVideoAsync()
-        {
-            if (!IsConnected)
-            {
-                return;
-            }
-
-            await _socket.EmitAsync("disable_livekit_video", null);
-            Log("Disabled LiveKit video");
-        }
-
-        [Serializable]
-        private class EnableLiveKitVideoPayload
-        {
-            public string sessionId;
-            public int targetFps;
         }
 
         /// <summary>
@@ -914,10 +859,6 @@ namespace Estuary
             Register("quota_exceeded", HandleQuotaExceeded);
             Register("session_timeout", HandleSessionTimeout);
             Register("voice_timeout", HandleVoiceTimeout);
-
-            // World model event handlers
-            Register("scene_graph_update", HandleSceneGraphUpdate);
-            Register("room_identified", HandleRoomIdentified);
 
             // Vision, memory, action, and session-policy event handlers
             Register("camera_capture", HandleCameraCaptureRequest);
@@ -1378,46 +1319,6 @@ namespace Estuary
             _isVoiceModeActive = false;
 
             DispatchToMainThread(() => OnVoiceTimeout?.Invoke(data));
-        }
-
-        private void HandleSceneGraphUpdate(string json)
-        {
-            if (string.IsNullOrEmpty(json))
-            {
-                return;
-            }
-
-            try
-            {
-                var update = SceneGraphUpdate.FromJson(json);
-                // Scene graph updates are useful for debugging the world model, but they
-                // arrive continuously -- gate them like the rest of the client's logging.
-                Log($"Received scene graph update: {update.SceneGraph?.EntityCount ?? 0} entities");
-                DispatchToMainThread(() => OnSceneGraphUpdate?.Invoke(update));
-            }
-            catch (Exception e)
-            {
-                LogError($"Failed to parse scene_graph_update: {e.Message}");
-            }
-        }
-
-        private void HandleRoomIdentified(string json)
-        {
-            if (string.IsNullOrEmpty(json))
-            {
-                return;
-            }
-
-            try
-            {
-                var room = RoomIdentified.FromJson(json);
-                Log($"Room identified: {room.RoomName} ({room.Status})");
-                DispatchToMainThread(() => OnRoomIdentified?.Invoke(room));
-            }
-            catch (Exception e)
-            {
-                LogError($"Failed to parse room_identified: {e.Message}");
-            }
         }
 
         private void HandleCameraCaptureRequest(string json)

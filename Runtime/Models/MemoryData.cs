@@ -45,7 +45,7 @@ namespace Estuary.Models
 
         /// <summary>
         /// "fact" | "preference" | "relationship" | "event" | "emotional_state"
-        /// | "correction" | "character_self" | "spatial_change".
+        /// | "correction" | "character_self" | "spatial_change" (legacy, no longer produced).
         /// </summary>
         public string MemoryType => memoryType;
 

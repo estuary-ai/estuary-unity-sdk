@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Remove the world-model integration (contract v1.39): the backend feature was never finished and the gateway no longer handles its events. Deleted `EstuaryWebcam`, `LiveKitVideoManager`, `ILiveKitVideoManager`, `DirectWebcamVideoSource`, `WebcamVideoSource`, the `SceneGraph`/`SceneGraphUpdate`/`RoomIdentified` and video-frame/device-pose payload models, `EstuaryClient.OnSceneGraphUpdate`, `OnRoomIdentified`, `EnableLiveKitVideoAsync`, `DisableLiveKitVideoAsync`, and `LiveKitBridge.RegisterVideoManagerFactory`/`CreateVideoManager`. Scenes with an `EstuaryWebcam` component will show a missing-script warning; remove the component. On-demand vision (`SendCameraImage`, `OnCameraCaptureRequested`) is unchanged.
+
 ### Changed
 
 - Raise the minimum Unity version to 2022.3 to match LiveKit SDK 2.1.0.
