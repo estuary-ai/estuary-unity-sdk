@@ -13,8 +13,7 @@ namespace Estuary
     /// at the audio unit level. This is the ONLY way to get working AEC on iOS — Unity's Microphone.Start()
     /// uses RemoteIO which does NOT apply AEC even when AVAudioSession is in VideoChat mode.
     ///
-    /// This class replaces DirectMicrophoneSource on iOS builds. It provides the same interface:
-    /// Start(), Stop(), AudioRead event, and VAD (Voice Activity Detection).
+    /// This class replaces DirectMicrophoneSource on iOS builds and publishes audio through AudioRead.
     ///
     /// Audio flow:
     ///   VPIO audio unit (hardware AEC) → native ring buffer → C# polling → AudioRead → LiveKit RtcAudioSource
@@ -65,41 +64,9 @@ namespace Estuary
         private float[] _pollBuffer;
         private float[] _sliceCache;
 
-        // VAD (Voice Activity Detection)
-        private bool _vadEnabled;
-        private float _vadThreshold = 0.010f;
         private float _currentVolume;
-        private bool _wasSpeaking;
 
         public override event Action<float[], int, int> AudioRead;
-
-        /// <summary>
-        /// Fired when speech is detected (volume crosses above threshold).
-        /// </summary>
-        public event Action OnSpeechDetected;
-
-        /// <summary>
-        /// Fired when silence is detected (volume drops below threshold).
-        /// </summary>
-        public event Action OnSilenceDetected;
-
-        /// <summary>
-        /// Enable/disable voice activity detection.
-        /// </summary>
-        public bool VadEnabled
-        {
-            get => _vadEnabled;
-            set => _vadEnabled = value;
-        }
-
-        /// <summary>
-        /// Volume threshold for VAD (0-1).
-        /// </summary>
-        public float VadThreshold
-        {
-            get => _vadThreshold;
-            set => _vadThreshold = Mathf.Clamp01(value);
-        }
 
         /// <summary>
         /// Current audio volume level (0-1).
@@ -246,30 +213,8 @@ namespace Estuary
             int samplesRead = EstuaryVPIO_ReadAudioData(_pollBuffer, MAX_SAMPLES_PER_POLL);
             if (samplesRead <= 0) return;
 
-            // Calculate volume for VAD
+            // Keep the audio level available for diagnostics.
             _currentVolume = CalculateRMS(_pollBuffer, samplesRead);
-
-            // Apply VAD
-            if (_vadEnabled)
-            {
-                bool isSpeaking = _currentVolume >= _vadThreshold;
-
-                if (isSpeaking && !_wasSpeaking)
-                {
-                    _wasSpeaking = true;
-                    OnSpeechDetected?.Invoke();
-                }
-                else if (!isSpeaking && _wasSpeaking)
-                {
-                    _wasSpeaking = false;
-                    OnSilenceDetected?.Invoke();
-                }
-
-                if (!isSpeaking)
-                {
-                    Array.Clear(_pollBuffer, 0, samplesRead);
-                }
-            }
 
             // Send to LiveKit — need an exactly-sized array
             float[] output;

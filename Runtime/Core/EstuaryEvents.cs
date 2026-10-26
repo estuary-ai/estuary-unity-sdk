@@ -122,20 +122,6 @@ namespace Estuary
         /// </summary>
         public delegate void MotiveUpdatedHandler(MotiveUpdatedEvent data);
 
-        #region World Model Events
-
-        /// <summary>
-        /// Delegate for scene graph update events from the world model.
-        /// </summary>
-        public delegate void SceneGraphUpdateHandler(SceneGraphUpdate update);
-
-        /// <summary>
-        /// Delegate for room identified events from the world model.
-        /// </summary>
-        public delegate void RoomIdentifiedHandler(RoomIdentified room);
-
-        #endregion
-
         #region Voice Mode Events
 
         /// <summary>

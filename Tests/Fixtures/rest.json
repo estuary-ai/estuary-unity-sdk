@@ -1,0 +1,393 @@
+{
+  "$comment": "Language-neutral REST conformance cases (SCRUM-255). The gateway test suite checks every case resolves to a real public route with that method. Each SDK test suite stubs its HTTP transport, calls the named SDK method with `args`, and asserts the request it builds has this method, path, query and JSON body. `sdk` lists which SDKs implement the call. A header case applies to every request an SDK sends. Add a case in the same change as any public REST addition; see sdk-conformance/README.md.",
+  "version": 1,
+  "args": {
+    "characterId": "char_123",
+    "playerId": "player_1",
+    "memoryId": "mem_9",
+    "encounterOther": "char_456"
+  },
+  "headers": {
+    "X-Estuary-Client": {
+      "pattern": "^estuary-(ts|python|unity|lens-studio)-sdk/[0-9]+\\.[0-9]+\\.[0-9]+[0-9A-Za-z.+-]*$",
+      "note": "Sent on every REST request. Lets the gateway attribute legacy-route usage by client and version."
+    }
+  },
+  "cases": [
+    {
+      "id": "memories.list",
+      "sdk": {"ts": "memory.getMemories", "python": "memory.get_memories", "unity": "GetMemories"},
+      "call": {"limit": 20, "offset": 0, "memoryType": "fact", "status": "active"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1/memories",
+      "query": {"limit": "20", "offset": "0", "memoryType": "fact", "status": "active"}
+    },
+    {
+      "id": "memories.timeline",
+      "sdk": {"ts": "memory.getTimeline", "python": "memory.get_timeline", "unity": "GetMemoryTimeline"},
+      "call": {"groupBy": "week"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/timeline",
+      "query": {"groupBy": "week"}
+    },
+    {
+      "id": "memories.stats",
+      "sdk": {"ts": "memory.getStats", "python": "memory.get_stats", "unity": "GetMemoryStats"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/stats"
+    },
+    {
+      "id": "memories.coreFacts",
+      "sdk": {"ts": "memory.getCoreFacts", "python": "memory.get_core_facts", "unity": "GetCoreFacts"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/core-facts"
+    },
+    {
+      "id": "memories.graph",
+      "sdk": {"ts": "memory.getGraph", "python": "memory.get_graph", "unity": "GetMemoryGraph"},
+      "call": {"includeEntities": true, "includeCharacterMemories": false},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/graph",
+      "query": {"includeEntities": "true", "includeCharacterMemories": "false"}
+    },
+    {
+      "id": "memories.search",
+      "sdk": {"ts": "memory.search", "python": "memory.search", "unity": "SearchMemories"},
+      "call": {"query": "favourite tea", "limit": 5},
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/search",
+      "json": {"query": "favourite tea", "limit": 5},
+      "note": "POST with a JSON body. Both SDKs used to send GET ?q=, which the gateway answers with 405."
+    },
+    {
+      "id": "memories.deleteAll",
+      "sdk": {"ts": "memory.deleteAll", "python": "memory.delete_all", "unity": "DeleteAllMemories"},
+      "call": {"confirm": true},
+      "method": "DELETE",
+      "path": "/api/v1/characters/char_123/players/player_1/memories",
+      "query": {"confirm": "true"}
+    },
+    {
+      "id": "conversations.list",
+      "sdk": {"python": "players.list", "unity": "ListConversations"},
+      "call": {"limit": 25, "offset": 0, "sortBy": "last_activity", "sortOrder": "desc"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players",
+      "query": {"limit": "25", "offset": "0", "sortBy": "last_activity", "sortOrder": "desc"}
+    },
+    {
+      "id": "conversations.stats",
+      "sdk": {"python": "players.get_stats", "unity": "GetConversationStats"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/stats"
+    },
+    {
+      "id": "conversations.get",
+      "sdk": {"python": "players.get", "unity": "GetConversation"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1"
+    },
+    {
+      "id": "conversations.messages",
+      "sdk": {"python": "players.get_messages", "unity": "GetMessages"},
+      "call": {"limit": 50, "page": 2},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/players/player_1/messages",
+      "query": {"limit": "50", "page": "2"}
+    },
+    {
+      "id": "conversations.delete",
+      "sdk": {"python": "players.delete", "unity": "DeleteConversation"},
+      "method": "DELETE",
+      "path": "/api/v1/characters/char_123/players/player_1",
+      "note": "204 with no body on v1. The legacy route returned 200 with a message."
+    },
+    {
+      "id": "characters.get",
+      "sdk": {"ts": "getCharacter", "python": "characters.get", "lens-studio": "getCharacter", "unity": "GetCharacter"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123"
+    },
+    {
+      "id": "characters.list",
+      "sdk": {"python": "characters.list", "lens-studio": "getCharacters", "unity": "ListCharacters"},
+      "note": "Unity GetAgents stays on the legacy GET /api/agents on purpose: this list is paginated (max 100) and GetAgents has no paging parameters, so callers expect every character.",
+      "call": {"limit": 20, "offset": 0},
+      "method": "GET",
+      "path": "/api/v1/characters",
+      "query": {"limit": "20", "offset": "0"}
+    },
+    {
+      "id": "characters.delete",
+      "sdk": {"python": "characters.delete", "unity": "DeleteAgent"},
+      "method": "DELETE",
+      "path": "/api/v1/characters/char_123"
+    },
+    {
+      "id": "generation.fromImage",
+      "sdk": {
+        "python": "generate.image_to_character",
+        "unity": "UploadImageToCharacter",
+        "lens-studio": "uploadImageToCharacter"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/from-image",
+      "note": "Multipart (file part `image`) or JSON with base64 `image` and `mimeType`. Fields are camelCase: ttsProvider, appearancePrompt, voicePrompt, personaPrompt, useDefaultVoice. Returns 201. Body is not asserted byte for byte because it carries an image."
+    },
+    {
+      "id": "generation.startModel",
+      "sdk": {"python": "generate.generate_model", "unity": "GenerateModel", "lens-studio": "generateModel"},
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/model",
+      "note": "Returns 202 {characterId, modelStatus, rigged}."
+    },
+    {
+      "id": "generation.modelStatus",
+      "sdk": {"python": "generate.get_model_status", "unity": "GetModelStatus", "lens-studio": "getModelStatus"},
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/model"
+    },
+    {
+      "id": "encounters.start",
+      "sdk": {"lens-studio": "startEncounter"},
+      "call": {"characterAId": "char_123", "characterBId": "char_456", "prompt": "Meet at the market", "maxTurns": 6},
+      "method": "POST",
+      "path": "/api/v1/encounters",
+      "json": {"characterAId": "char_123", "characterBId": "char_456", "prompt": "Meet at the market", "maxTurns": 6}
+    },
+    {
+      "id": "characters.create",
+      "sdk": {
+        "unity": "CreateCharacter"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters",
+      "json": {
+        "persona": {
+          "name": "Guide",
+          "description": "A helpful guide"
+        }
+      }
+    },
+    {
+      "id": "characters.update",
+      "sdk": {
+        "unity": "UpdateCharacter"
+      },
+      "method": "PUT",
+      "path": "/api/v1/characters/char_123",
+      "json": {
+        "persona": {
+          "name": "Guide 2"
+        }
+      }
+    },
+    {
+      "id": "characters.transfer",
+      "sdk": {
+        "unity": "TransferCharacter"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/transfer",
+      "json": {
+        "destination": "org",
+        "orgId": "org_1"
+      }
+    },
+    {
+      "id": "characters.motive",
+      "sdk": {
+        "unity": "GetCharacterMotive"
+      },
+      "method": "GET",
+      "path": "/api/v1/characters/char_123/motive",
+      "query": {
+        "playerId": "player_1"
+      }
+    },
+    {
+      "id": "characters.setMotive",
+      "sdk": {
+        "unity": "SetCharacterMotive"
+      },
+      "method": "PATCH",
+      "path": "/api/v1/characters/char_123/motive",
+      "json": {
+        "motive": "Find a friend"
+      },
+      "query": {
+        "playerId": "player_1"
+      }
+    },
+    {
+      "id": "characters.resetMotive",
+      "sdk": {
+        "unity": "ResetCharacterMotive"
+      },
+      "method": "DELETE",
+      "path": "/api/v1/characters/char_123/motive",
+      "query": {
+        "playerId": "player_1"
+      }
+    },
+    {
+      "id": "characters.avatar",
+      "sdk": {
+        "unity": "UploadAvatar"
+      },
+      "method": "PUT",
+      "path": "/api/v1/characters/char_123/avatar"
+    },
+    {
+      "id": "characters.modelFile",
+      "sdk": {
+        "unity": "UploadModel"
+      },
+      "method": "PUT",
+      "path": "/api/v1/characters/char_123/model-file"
+    },
+    {
+      "id": "generation.rigged",
+      "sdk": {
+        "unity": "GenerateModel"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/model",
+      "json": {
+        "rigged": true
+      }
+    },
+    {
+      "id": "memories.create",
+      "sdk": {
+        "unity": "CreateMemory"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/players/player_1/memories",
+      "json": {
+        "content": "Enjoys tea",
+        "memoryType": "fact"
+      }
+    },
+    {
+      "id": "memories.update",
+      "sdk": {
+        "unity": "UpdateMemory"
+      },
+      "method": "PATCH",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/mem_9",
+      "json": {
+        "content": "Enjoys green tea",
+        "importance": 0.8
+      }
+    },
+    {
+      "id": "memories.delete",
+      "sdk": {
+        "unity": "DeleteMemory"
+      },
+      "method": "DELETE",
+      "path": "/api/v1/characters/char_123/players/player_1/memories/mem_9",
+      "query": {
+        "hard": "true"
+      }
+    },
+    {
+      "id": "shares.create",
+      "sdk": {
+        "unity": "CreateShare"
+      },
+      "method": "POST",
+      "path": "/api/v1/share",
+      "json": {
+        "characterId": "char_123",
+        "ttl": "7d"
+      }
+    },
+    {
+      "id": "shares.open",
+      "sdk": {
+        "unity": "OpenShare"
+      },
+      "method": "POST",
+      "path": "/api/v1/share/share_1/open"
+    },
+    {
+      "id": "shares.exchange",
+      "sdk": {
+        "unity": "ExchangeShare"
+      },
+      "method": "POST",
+      "path": "/api/v1/share/share_token/exchange",
+      "json": {
+        "recipientId": "player_1"
+      }
+    },
+    {
+      "id": "shares.list",
+      "sdk": {
+        "unity": "ListShares"
+      },
+      "method": "GET",
+      "path": "/api/v1/share/character/char_123"
+    },
+    {
+      "id": "shares.revoke",
+      "sdk": {
+        "unity": "RevokeShare"
+      },
+      "method": "DELETE",
+      "path": "/api/v1/share/share_1"
+    },
+    {
+      "id": "shares.revokeByKey",
+      "sdk": {
+        "unity": "RevokeSharesByApiKey"
+      },
+      "method": "DELETE",
+      "path": "/api/v1/share/by-api-key/key_1"
+    },
+    {
+      "id": "turn.single",
+      "sdk": {
+        "unity": "Turn"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/turn",
+      "json": {
+        "message": "Hello",
+        "playerId": "player_1"
+      }
+    },
+    {
+      "id": "turn.stream",
+      "sdk": {
+        "unity": "StreamTurn"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/turn",
+      "json": {
+        "message": "Hello",
+        "playerId": "player_1",
+        "stream": true
+      }
+    },
+    {
+      "id": "characters.testApiEndpoint",
+      "sdk": {
+        "unity": "TestApiEndpoint"
+      },
+      "method": "POST",
+      "path": "/api/v1/characters/char_123/api-endpoints/test",
+      "json": {
+        "endpoint": {
+          "name": "catalog",
+          "description": "Search catalog",
+          "url": "https://proxy.invalid/catalog",
+          "parameters": []
+        },
+        "arguments": {}
+      }
+    }
+  ]
+}

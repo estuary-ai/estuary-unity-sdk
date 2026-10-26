@@ -1,9 +1,6 @@
 using System;
 using System.Collections;
-using System.Text;
-using UnityEngine.Networking;
 using Estuary.Models;
-using Newtonsoft.Json;
 
 namespace Estuary
 {
@@ -24,19 +21,12 @@ namespace Estuary
     {
         private const string BasePath = "/api/v1/simulation";
 
-        // Omit nulls: the server applies its own defaults to omitted optionals
-        // and would reject explicit nulls on defaulted fields (e.g. priority).
-        private static readonly JsonSerializerSettings RequestSettings =
-            new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
-
-        private readonly string _serverUrl;
         private readonly EstuaryHttpClient _http;
 
         public EstuarySimulationApi(EstuaryConfig config)
         {
             if (config == null)
                 throw new ArgumentNullException(nameof(config));
-            _serverUrl = config.ServerUrl.TrimEnd('/');
             _http = new EstuaryHttpClient(config);
         }
 
@@ -89,9 +79,9 @@ namespace Estuary
         /// <summary>Add one of the caller's characters to a world (POST /worlds/{id}/characters). 409 if already a member.</summary>
         public IEnumerator AddCharacter(
             string worldId, string characterId, string roleInWorld,
-            Action<SimulationWorldCharacter> onSuccess, Action<string> onError)
+            Action<SimulationWorldCharacter> onSuccess, Action<string> onError, string motive = null)
             => Send("POST", $"/worlds/{Esc(worldId)}/characters",
-                new SimulationCharacterSpec(characterId, roleInWorld), onSuccess, onError);
+                new SimulationCharacterSpec(characterId, roleInWorld, motive), onSuccess, onError);
 
         /// <summary>Remove a character from a world (also drops its seed relationships).</summary>
         public IEnumerator RemoveCharacter(
@@ -143,6 +133,11 @@ namespace Estuary
             Action<SimulationInstance> onSuccess, Action<string> onError)
             => Send("POST", $"/instances/{Esc(instanceId)}/status",
                 new InstanceStatusBody { status = status }, onSuccess, onError);
+
+        /// <summary>Override a character's private live motive in this instance.</summary>
+        public IEnumerator SetCharacterMotive(string instanceId, string characterId, string motive,
+            Action<SimulationInstance> onSuccess, Action<string> onError)
+            => Send("PATCH", $"/instances/{Esc(instanceId)}/motives/{Esc(characterId)}", new { motive }, onSuccess, onError);
 
         /// <summary>Delete an instance and all data it generated (DELETE /instances/{id}). Must be paused first (409 otherwise).</summary>
         public IEnumerator DeleteInstance(string instanceId, Action onSuccess, Action<string> onError)
@@ -218,74 +213,20 @@ namespace Estuary
             public string status;
         }
 
-        private static string Esc(string segment) => UnityWebRequest.EscapeURL(segment ?? "");
+        private static string Esc(string segment) => EstuaryHttpClient.Esc(segment);
 
         private IEnumerator SendNoContent(
             string method, string path, object body, Action onSuccess, Action<string> onError)
             => Send<object>(method, path, body, _ => onSuccess?.Invoke(), onError);
 
-        private IEnumerator Send<T>(
-            string method, string path, object body,
+        private IEnumerator Send<T>(string method, string path, object body,
             Action<T> onSuccess, Action<string> onError, int timeout = 15)
-        {
-            string token = null;
-            yield return _http.ResolveToken(t => token = t);
+            => _http.Send(method, BasePath + path, body, onSuccess, onError, timeout);
 
-            var url = _serverUrl + BasePath + path;
+        /// <summary>Optional org context sent on simulation REST requests.</summary>
+        public string OrgId { get => _http.OrgId; set => _http.OrgId = value; }
 
-            using (var request = new UnityWebRequest(url, method))
-            {
-                if (body != null)
-                {
-                    var json = JsonConvert.SerializeObject(body, RequestSettings);
-                    request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
-                    request.SetRequestHeader("Content-Type", "application/json");
-                }
-                request.downloadHandler = new DownloadHandlerBuffer();
-                _http.ApplyAuth(request, token);
-                request.timeout = timeout;
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    onError?.Invoke(DescribeError(request));
-                    yield break;
-                }
-
-                if (request.responseCode == 204 ||
-                    string.IsNullOrEmpty(request.downloadHandler.text))
-                {
-                    onSuccess?.Invoke(default);
-                    yield break;
-                }
-
-                T parsed;
-                try
-                {
-                    parsed = JsonConvert.DeserializeObject<T>(request.downloadHandler.text);
-                }
-                catch (Exception e)
-                {
-                    onError?.Invoke($"Failed to parse response: {e.Message}");
-                    yield break;
-                }
-                onSuccess?.Invoke(parsed);
-            }
-        }
-
-        /// <summary>
-        /// Include the response body in errors — the server explains failures
-        /// there ({"detail": ...}: validation, ownership 404s, 409 conflicts,
-        /// 429 rate/quota) and UnityWebRequest.error is just the status line.
-        /// </summary>
-        private static string DescribeError(UnityWebRequest request)
-        {
-            var bodyText = request.downloadHandler?.text;
-            return string.IsNullOrEmpty(bodyText)
-                ? request.error
-                : $"{request.error}: {bodyText}";
-        }
+        internal EstuaryHttpClient Http => _http;
 
         #endregion
     }

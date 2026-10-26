@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Events;
 using Estuary.Models;
-using Estuary.Utilities;
 
 namespace Estuary
 {
@@ -51,11 +50,6 @@ namespace Estuary
         [Tooltip("Automatically start a voice session after connecting")]
         private bool autoStartVoiceSession = false;
 
-        [Header("Actions")]
-        [SerializeField]
-        [Tooltip("Strip action tags from bot response text (recommended for display)")]
-        private bool stripActionsFromText = true;
-
         [Header("Events")]
         [SerializeField]
         private SessionConnectedEvent onConnected = new SessionConnectedEvent();
@@ -79,7 +73,7 @@ namespace Estuary
         private ErrorEvent onError = new ErrorEvent();
 
         [SerializeField]
-        [Tooltip("Fired when the character performs an in-world action (typed client_action event, or a legacy tag parsed from bot response text)")]
+        [Tooltip("Fired when the character performs an in-world action (typed client_action event)")]
         private ActionReceivedEvent onActionReceived = new ActionReceivedEvent();
 
         [SerializeField]
@@ -106,6 +100,11 @@ namespace Estuary
         [Tooltip("Fired when the server rejects the connection due to a policy cap (disconnect follows; no auto-reconnect)")]
         private SessionRejectedEvent onSessionRejected = new SessionRejectedEvent();
 
+        [SerializeField] private DelegationUpdateEvent onDelegationUpdate = new DelegationUpdateEvent();
+        [SerializeField] private ApiEndpointResultEvent onApiEndpointResult = new ApiEndpointResultEvent();
+        [SerializeField] private ModerationWarningEvent onModerationWarning = new ModerationWarningEvent();
+        [SerializeField] private ModerationFlagEvent onModerationFlag = new ModerationFlagEvent();
+        [SerializeField] private ServerErrorEvent onServerError = new ServerErrorEvent();
         #endregion
 
         #region Properties
@@ -178,23 +177,29 @@ namespace Estuary
         // though the socket layer behaved. Cleared on explicit Connect().
         private bool _serverEndedSession;
 
-        // Legacy XML <action> tag path only: actions already fired this turn.
-        // HandleBotResponse re-parses EVERY bot_response chunk, and the final
-        // chunk carries the whole cumulative text — so any tag that also landed
-        // intact inside a streamed chunk gets parsed twice and fired twice.
-        // Today's token-level chunking splits tags across chunks so this rarely
-        // bites, but that is luck (chunk granularity), not a guarantee: sentence
-        // chunking or a model emitting a tag in one burst brings it straight
-        // back. Keyed and scoped exactly like the server's own per-turn guard
-        // (worker/processor.py fired_client_actions): name + sorted parameters,
-        // cleared whenever the message id changes. The typed client_action path
-        // needs none of this — the server guarantees exactly-once there.
-        private readonly HashSet<string> _firedLegacyActions = new HashSet<string>();
-        private string _firedLegacyActionsMessageId;
+        private string _textMessageId;
 
         #endregion
 
         #region C# Events
+
+        /// <summary>Fired on receipt of DelegationUpdate on the main thread.</summary>
+        public event Action<DelegationUpdate> OnDelegationUpdate;
+
+        /// <summary>Fired on receipt of ApiEndpointResult on the main thread.</summary>
+        public event Action<ApiEndpointResult> OnApiEndpointResult;
+
+        /// <summary>Fired on receipt of ModerationWarning on the main thread.</summary>
+        public event Action<ModerationWarning> OnModerationWarning;
+
+        /// <summary>Fired on receipt of ModerationFlag on the main thread.</summary>
+        public event Action<ModerationFlag> OnModerationFlag;
+
+        /// <summary>Fired on receipt of ServerError on the main thread.</summary>
+        public event Action<ServerError> OnServerError;
+
+        /// <summary>LiveKit bot state and owning utterance ID; attributes are not a local playback clock.</summary>
+        public event Action<BotSpeakingState> OnBotSpeakingStateChanged;
 
         /// <summary>
         /// Fired when session is connected.
@@ -238,9 +243,7 @@ namespace Estuary
 
         /// <summary>
         /// Fired when the character performs an in-world action. Actions arrive
-        /// as typed client_action events (contract v1.9); legacy XML-style
-        /// &lt;action name="sit" /&gt; tags in bot response text also fire this
-        /// (dormant path — the server no longer instructs models to emit tags).
+        /// as typed client_action events. Text tags never execute actions.
         /// </summary>
         public event Action<AgentAction> OnActionReceived;
 
@@ -689,6 +692,11 @@ namespace Estuary
 
         internal void HandleDisconnected(string reason)
         {
+            audioSource?.StopPlayback();
+            ReleaseLocalVoiceState();
+            CurrentPartialResponse = "";
+            CurrentMessageId = null;
+            _textMessageId = null;
             IsConnected = false;
             CurrentSession = null;
             IsVoiceSessionActive = false;
@@ -705,8 +713,7 @@ namespace Estuary
             // with nobody talking, in a loop. Resume requires explicit Connect().
             if (_serverEndedSession)
             {
-                _serverEndedSession = false;
-                Debug.Log($"[EstuaryCharacter] Server ended the session (idle timeout) — skipping auto-reconnect. Call Connect() to resume.");
+                Debug.Log("[EstuaryCharacter] Server ended the session — call Connect() to resume.");
             }
             else if (autoReconnect && reason != "client disconnect")
             {
@@ -717,119 +724,28 @@ namespace Estuary
 
         internal void HandleBotResponse(BotResponse response)
         {
-            // Track message ID
-            if (!string.IsNullOrEmpty(response.MessageId))
+            if (_textMessageId != response.MessageId)
             {
-                CurrentMessageId = response.MessageId;
+                CurrentPartialResponse = "";
+                _textMessageId = response.MessageId;
             }
-
-            // Parse and handle actions from the response text
-            var responseText = response.Text;
-            if (!string.IsNullOrEmpty(responseText) && ActionParser.ContainsActions(responseText))
-            {
-                var actions = ActionParser.ParseActions(responseText);
-
-                // Fire action events for each parsed action, once per turn.
-                foreach (var action in actions)
-                {
-                    if (!TryMarkLegacyActionFired(action, CurrentMessageId))
-                    {
-                        continue;
-                    }
-
-                    Debug.Log($"[EstuaryCharacter] Action received: {action}");
-                    OnActionReceived?.Invoke(action);
-                    onActionReceived?.Invoke(action);
-                }
-
-                // Optionally strip action tags from text for display
-                if (stripActionsFromText)
-                {
-                    responseText = ActionParser.StripActions(responseText);
-                }
-            }
+            if (!string.IsNullOrEmpty(response.MessageId)) CurrentMessageId = response.MessageId;
 
             // Handle streaming responses
             if (response.IsFinal)
             {
-                // Final response - use full text (possibly with actions stripped)
-                CurrentPartialResponse = responseText;
+                // Final response - use full text
+                CurrentPartialResponse = response.Text;
             }
             else
             {
                 // Partial response - accumulate
-                CurrentPartialResponse += responseText;
+                CurrentPartialResponse += response.Text;
             }
 
-            // Invoke events with the (possibly modified) response
+            // Invoke events with the server response
             OnBotResponse?.Invoke(response);
             onBotResponse?.Invoke(response);
-        }
-
-        /// <summary>
-        /// Claim an action for a turn, returning false if an identical one was
-        /// already claimed for that message id.
-        ///
-        /// Mirrors the server's per-turn guard (worker/processor.py
-        /// fired_client_actions): the key is the action name plus its parameters
-        /// in sorted order, so two genuinely different actions in one turn both
-        /// fire while a re-parse of the same tag does not. Two byte-identical
-        /// tags in one turn therefore collapse to one — matching the server's
-        /// behavior on the typed path, and the desirable reading of a model that
-        /// emitted the same tag twice.
-        ///
-        /// BOTH delivery paths claim into this one set, but they use the result
-        /// differently. The legacy tag path obeys it. The typed path claims and
-        /// then fires regardless, because the server already guarantees
-        /// exactly-once there and it is authoritative; its claim exists purely so
-        /// that a stray &lt;action&gt; tag left in the same turn's text cannot
-        /// replay an action the client has already performed.
-        /// </summary>
-        /// <param name="action">The action being delivered.</param>
-        /// <param name="messageId">
-        /// Turn the claim belongs to. The typed path must pass the event's own
-        /// message id rather than <see cref="CurrentMessageId"/>: a client_action
-        /// can arrive before this turn's first bot_response, so CurrentMessageId
-        /// may still name the PREVIOUS turn, and the claim would be filed in the
-        /// wrong bucket and then cleared the moment the real id arrived.
-        /// </param>
-        private bool TryMarkLegacyActionFired(AgentAction action, string messageId)
-        {
-            if (action == null)
-            {
-                return false;
-            }
-
-            // A new turn resets the guard. Null/empty ids (older servers, or
-            // synthesized responses) share one bucket, which is still safer than
-            // no dedup at all.
-            messageId = messageId ?? string.Empty;
-            if (_firedLegacyActionsMessageId != messageId)
-            {
-                _firedLegacyActionsMessageId = messageId;
-                _firedLegacyActions.Clear();
-            }
-
-            var key = new System.Text.StringBuilder(action.Name ?? string.Empty);
-            if (action.Parameters != null && action.Parameters.Count > 0)
-            {
-                var names = new List<string>(action.Parameters.Keys);
-                names.Sort(System.StringComparer.Ordinal);
-                foreach (var p in names)
-                {
-                    key.Append('\u001F').Append(p).Append('=').Append(action.Parameters[p]);
-                }
-            }
-
-            if (!_firedLegacyActions.Add(key.ToString()))
-            {
-                Debug.Log(
-                    $"[EstuaryCharacter] Suppressing duplicate legacy action '{action.Name}' " +
-                    "(already fired this turn)");
-                return false;
-            }
-
-            return true;
         }
 
         internal void HandleBotVoice(BotVoice voice)
@@ -977,6 +893,47 @@ namespace Estuary
             onCameraCaptureRequested?.Invoke(request);
         }
 
+        internal void HandleDelegationUpdate(DelegationUpdate data)
+        {
+            OnDelegationUpdate?.Invoke(data);
+            onDelegationUpdate?.Invoke(data);
+        }
+
+        internal void HandleApiEndpointResult(ApiEndpointResult data)
+        {
+            OnApiEndpointResult?.Invoke(data);
+            onApiEndpointResult?.Invoke(data);
+        }
+
+        internal void HandleModerationWarning(ModerationWarning data)
+        {
+            if (data.IsTerminated)
+            {
+                _serverEndedSession = true;
+                audioSource?.StopPlayback();
+                ReleaseLocalVoiceState();
+            }
+            OnModerationWarning?.Invoke(data);
+            onModerationWarning?.Invoke(data);
+        }
+
+        internal void HandleModerationFlag(ModerationFlag data)
+        {
+            audioSource?.RedactMessage(data.MessageId);
+            if (_textMessageId == data.MessageId)
+                CurrentPartialResponse = data.Message ?? "";
+            OnModerationFlag?.Invoke(data);
+            onModerationFlag?.Invoke(data);
+        }
+
+        internal void HandleServerError(ServerError data)
+        {
+            OnServerError?.Invoke(data);
+            onServerError?.Invoke(data);
+        }
+
+        internal void HandleBotSpeakingStateChanged(BotSpeakingState data) => OnBotSpeakingStateChanged?.Invoke(data);
+
         internal void HandleMemoryUpdated(MemoryUpdatedEvent data)
         {
             Debug.Log($"[EstuaryCharacter] Memory updated: {data}");
@@ -1001,13 +958,6 @@ namespace Estuary
             // so integrators (e.g. EstuaryActionManager) see no API change.
             // Fire-on-arrival: not synchronized to TTS playback.
             var action = data.ToAgentAction();
-
-            // Claim it against this turn so the dormant tag parser can't replay
-            // the same action if a stray <action/> tag survives in the reply
-            // text. The claim's result is deliberately ignored: the server
-            // guarantees exactly-once here and is authoritative, so a typed
-            // event always fires.
-            TryMarkLegacyActionFired(action, data.MessageId);
 
             Debug.Log($"[EstuaryCharacter] Action received: {action}");
             OnActionReceived?.Invoke(action);
@@ -1055,6 +1005,12 @@ namespace Estuary
         [Serializable]
         public class SessionConnectedEvent : UnityEvent<SessionInfo> { }
 
+        [Serializable] public class DelegationUpdateEvent : UnityEvent<DelegationUpdate> { }
+        [Serializable] public class ApiEndpointResultEvent : UnityEvent<ApiEndpointResult> { }
+        [Serializable] public class ModerationWarningEvent : UnityEvent<ModerationWarning> { }
+        [Serializable] public class ModerationFlagEvent : UnityEvent<ModerationFlag> { }
+        [Serializable] public class ServerErrorEvent : UnityEvent<ServerError> { }
+
         [Serializable]
         public class BotResponseEvent : UnityEvent<BotResponse> { }
 
@@ -1093,7 +1049,6 @@ namespace Estuary
         #endregion
     }
 }
-
 
 
 

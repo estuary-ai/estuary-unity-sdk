@@ -69,10 +69,12 @@ namespace Estuary.Samples
         private readonly List<ChatMessage> _chatHistory = new List<ChatMessage>();
         private bool _isVoiceMode;
         private string _currentResponse = "";
+        private string _currentMessageId;
 
         [Serializable]
         private class ChatMessage
         {
+            public string MessageId;
             public string Role;
             public string Content;
             public DateTime Timestamp;
@@ -114,6 +116,8 @@ namespace Estuary.Samples
                 character.OnTranscript += HandleTranscript;
                 character.OnVoiceReceived += HandleVoiceReceived;
                 character.OnError += HandleError;
+                character.OnModerationFlag += HandleModerationFlag;
+                character.OnModerationWarning += HandleModerationWarning;
             }
 
             // Set up UI
@@ -138,6 +142,8 @@ namespace Estuary.Samples
                 character.OnTranscript -= HandleTranscript;
                 character.OnVoiceReceived -= HandleVoiceReceived;
                 character.OnError -= HandleError;
+                character.OnModerationFlag -= HandleModerationFlag;
+                character.OnModerationWarning -= HandleModerationWarning;
             }
 
             // Clean up UI
@@ -305,11 +311,13 @@ namespace Estuary.Samples
 
         private void HandleBotResponse(BotResponse response)
         {
+            if (_currentMessageId != response.MessageId) _currentResponse = "";
+            _currentMessageId = response.MessageId;
             if (response.IsFinal)
             {
                 // Final response - add complete message to history
                 _currentResponse = response.Text;
-                AddToHistory("assistant", _currentResponse);
+                AddToHistory("assistant", _currentResponse, response.MessageId);
                 Debug.Log($"[BasicChatDemo] AI (final): {_currentResponse}");
             }
             else
@@ -320,6 +328,24 @@ namespace Estuary.Samples
             }
 
             UpdateResponseDisplay();
+        }
+
+        private void HandleModerationFlag(ModerationFlag flag)
+        {
+            foreach (var entry in _chatHistory)
+                if (entry.Role == "assistant" && entry.MessageId == flag.MessageId)
+                    entry.Content = flag.Message ?? "";
+            if (_currentMessageId == flag.MessageId)
+            {
+                _currentResponse = flag.Message ?? "";
+                UpdateResponseDisplay();
+            }
+        }
+
+        private void HandleModerationWarning(ModerationWarning warning)
+        {
+            UpdateStatus(warning.Message);
+            if (warning.IsTerminated) _isVoiceMode = false;
         }
 
         private void HandleTranscript(SttResponse response)
@@ -375,10 +401,11 @@ namespace Estuary.Samples
 
         #region Private Methods
 
-        private void AddToHistory(string role, string content)
+        private void AddToHistory(string role, string content, string messageId = null)
         {
             _chatHistory.Add(new ChatMessage
             {
+                MessageId = messageId,
                 Role = role,
                 Content = content,
                 Timestamp = DateTime.Now
