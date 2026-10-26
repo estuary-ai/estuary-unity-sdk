@@ -11,7 +11,7 @@ namespace Estuary
     /// GameObject at runtime.
     ///
     /// Pipeline (mirrors the web frontend's Model3DViewer flow):
-    ///   resolve the ready model URL (GET /api/agents or /model-status)
+    ///   resolve the ready model URL (GET /api/v1/characters/{id} or /{id}/model)
     ///     -> download the GLB (EstuaryHttpClient.DownloadGlb)
     ///     -> import + instantiate via the optional glTF importer (ModelLoaderBridge / glTFast)
     ///     -> apply a provider-specific orientation offset and optional height normalization.
@@ -83,7 +83,7 @@ namespace Estuary
 
         /// <summary>
         /// Load a character's model by agent id. Resolves the ready GLB URL + provider from
-        /// the agents list, then downloads and instantiates it.
+        /// the character endpoint, then downloads and instantiates it.
         /// </summary>
         public Coroutine LoadForAgent(string agentId,
             Action<GameObject> onSuccess = null, Action<string> onError = null)
@@ -111,15 +111,9 @@ namespace Estuary
 
             AgentResponse agent = null;
             string err = null;
-            yield return Http.GetAgents(
-                list =>
-                {
-                    if (list != null)
-                        agent = list.Find(a => a != null && a.Id == agentId);
-                },
-                e => err = e);
+            yield return Http.GetCharacter(agentId, a => agent = a, e => err = e);
 
-            if (err != null) { Fail(onError, $"Could not fetch agents: {err}"); yield break; }
+            if (err != null) { Fail(onError, $"Could not fetch character: {err}"); yield break; }
             if (agent == null) { Fail(onError, $"Agent '{agentId}' not found (or not visible to this key/player)."); yield break; }
 
             if (!agent.HasLoadableModel)

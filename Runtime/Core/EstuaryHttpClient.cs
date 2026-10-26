@@ -1,8 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 using Estuary.Models;
@@ -11,257 +11,163 @@ using Newtonsoft.Json.Linq;
 
 namespace Estuary
 {
-    /// <summary>
-    /// HTTP client for Estuary REST API endpoints.
-    /// Uses UnityWebRequest for HTTP operations with API key authentication.
-    /// All methods are coroutines for use with StartCoroutine.
-    /// </summary>
-    public class EstuaryHttpClient
+    /// <summary>Coroutine REST client. Start requests with StartCoroutine; failures include HTTP status and response detail.</summary>
+    public partial class EstuaryHttpClient
     {
         readonly string _serverUrl;
         readonly string _apiKey;
         readonly EstuaryConfig _config;
+        internal static readonly JsonSerializerSettings RequestSettings =
+            new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
 
-        /// <summary>
-        /// Optional player identity sent as X-Player-Id on every request.
-        /// Used by third-party apps to scope API results per end-user.
-        /// </summary>
+        /// <summary>Optional verified player identity used to scope REST operations.</summary>
         public string PlayerId { get; set; }
+        /// <summary>Optional organization context for org-owned resources.</summary>
+        public string OrgId { get; set; }
+
+        // Stub the final request, not a separate builder: conformance tests exercise the real public methods.
+        internal Func<RestRequest, RestResponse> TransportForTest;
 
         public EstuaryHttpClient(EstuaryConfig config)
         {
+            _config = config != null ? config : throw new ArgumentNullException(nameof(config));
             _serverUrl = config.ServerUrl.TrimEnd('/');
             _apiKey = config.ApiKey;
-            _config = config;
         }
 
-        /// <summary>
-        /// Gets the current auth token if a token provider is set.
-        /// Returns null if no provider or if the provider fails.
-        /// Internal so sibling REST clients (EstuarySimulationApi) reuse the
-        /// exact same auth resolution instead of duplicating it.
-        /// </summary>
         internal IEnumerator ResolveToken(Action<string> onToken)
         {
-            var tokenProvider = _config?.TokenProvider;
-            if (tokenProvider == null)
-            {
-                onToken?.Invoke(null);
-                yield break;
-            }
-
-            var tokenTask = tokenProvider();
-            while (!tokenTask.IsCompleted)
-                yield return null;
-
-            if (tokenTask.Exception != null || string.IsNullOrEmpty(tokenTask.Result))
-            {
-                Debug.LogWarning("[EstuaryHttpClient] Token provider failed, falling back to API key");
-                onToken?.Invoke(null);
-                yield break;
-            }
-
-            onToken?.Invoke(tokenTask.Result);
+            var provider = _config.TokenProvider;
+            if (provider == null) { onToken(null); yield break; }
+            System.Threading.Tasks.Task<string> task;
+            try { task = provider(); }
+            catch (Exception) { onToken(null); yield break; }
+            if (task == null) { onToken(null); yield break; }
+            while (!task.IsCompleted) yield return null;
+            onToken(task.IsCanceled || task.IsFaulted ? null : task.Result);
         }
 
-        /// <summary>
-        /// Applies auth header to a UnityWebRequest.
-        /// Uses Bearer token if available, otherwise X-API-Key (only when no token provider is configured).
-        /// Also identifies the SDK to the gateway via X-Estuary-Client.
-        /// </summary>
-        internal void ApplyAuth(UnityWebRequest request, string token)
+        internal Dictionary<string, string> RequestHeaders(string token, bool anonymous = false, bool bearerKey = false)
         {
-            foreach (var header in BuildHeaders(token))
-                request.SetRequestHeader(header.Key, header.Value);
-        }
-
-        /// <summary>
-        /// Headers sent on every Estuary REST request. Split from ApplyAuth (and static) so
-        /// EditMode tests can inspect them without a UnityWebRequest or a config asset.
-        /// </summary>
-        internal Dictionary<string, string> BuildHeaders(string token)
-            => BuildHeaders(token, _apiKey, _config?.TokenProvider != null, PlayerId);
-
-        internal static Dictionary<string, string> BuildHeaders(
-            string token, string apiKey, bool hasTokenProvider, string playerId)
-        {
-            var headers = new Dictionary<string, string>
+            var headers = new Dictionary<string, string> { ["X-Estuary-Client"] = EstuarySdk.ClientIdentification };
+            if (anonymous) return headers;
+            if (!string.IsNullOrEmpty(token)) headers["Authorization"] = "Bearer " + token;
+            else if (_config.TokenProvider == null && !string.IsNullOrEmpty(_apiKey))
             {
-                { EstuarySdkInfo.ClientHeaderName, EstuarySdkInfo.ClientHeaderValue }
-            };
-
-            if (!string.IsNullOrEmpty(token))
-            {
-                headers["Authorization"] = $"Bearer {token}";
+                if (bearerKey) headers["Authorization"] = "Bearer " + _apiKey;
+                else headers["X-API-Key"] = _apiKey;
             }
-            else if (!hasTokenProvider && !string.IsNullOrEmpty(apiKey))
-            {
-                // Only use API key when no token provider is configured (server-to-server / legacy SDK).
-                // When a token provider exists (per-user Firebase auth), falling back to the
-                // API key would silently escalate to developer-level access.
-                headers["X-API-Key"] = apiKey;
-            }
-
-            if (!string.IsNullOrEmpty(playerId))
-            {
-                headers["X-Player-Id"] = playerId;
-            }
-
+            if (!string.IsNullOrEmpty(PlayerId)) headers["X-Player-Id"] = PlayerId;
+            if (!string.IsNullOrEmpty(OrgId)) headers["X-Org-Id"] = OrgId;
             return headers;
         }
 
-        // v1 CharacterResponse spells these snake_case; AgentResponse keeps the legacy camelCase names.
-        static readonly string[][] V1CharacterFieldAliases =
+        internal void ApplyAuth(UnityWebRequest request, string token)
         {
-            new[] { "model_url", "modelUrl" },
-            new[] { "model_preview_url", "modelPreviewUrl" },
-            new[] { "model_status", "modelStatus" },
-            new[] { "model_provider", "modelProvider" },
-            new[] { "source_image_url", "sourceImageUrl" },
-            new[] { "generated_voice_id", "generatedVoiceId" },
-        };
-
-        /// <summary>
-        /// Parses a character body into AgentResponse. Accepts both the v1 CharacterResponse
-        /// shape (snake_case model/voice fields) and the legacy camelCase agent dict.
-        /// ModelProvider is null when the gateway predates model_provider on the v1 shape.
-        /// </summary>
-        internal static AgentResponse ParseCharacter(string json)
-        {
-            var obj = JObject.Parse(json);
-            foreach (var alias in V1CharacterFieldAliases)
-            {
-                if (obj[alias[1]] == null && obj[alias[0]] != null)
-                    obj[alias[1]] = obj[alias[0]];
-            }
-            return obj.ToObject<AgentResponse>();
+            foreach (var header in RequestHeaders(token)) request.SetRequestHeader(header.Key, header.Value);
         }
 
-        /// <summary>
-        /// Uploads an image to generate a character via POST /api/v1/characters/from-image.
-        /// Multipart form upload with "image" field. The server answers 201 with the v1
-        /// CharacterResponse shape, which is mapped onto AgentResponse.
-        /// </summary>
-        public IEnumerator UploadImageToCharacter(
-            byte[] imageBytes, string mimeType,
-            Action<AgentResponse> onSuccess, Action<string> onError)
+        internal static string Esc(string value) => Uri.EscapeDataString(value ?? "");
+        internal static string CharacterPath(string id) => "/api/v1/characters/" + Esc(id);
+        internal static string PairPath(string characterId, string playerId) => CharacterPath(characterId) + "/players/" + Esc(playerId);
+        internal static string Query(params object[] pairs)
+        {
+            var parts = new List<string>();
+            for (int i = 0; i < pairs.Length; i += 2)
+            {
+                if (pairs[i + 1] == null) continue;
+                var value = pairs[i + 1] is bool b ? (b ? "true" : "false") : Convert.ToString(pairs[i + 1], CultureInfo.InvariantCulture);
+                parts.Add(Esc((string)pairs[i]) + "=" + Esc(value));
+            }
+            return parts.Count == 0 ? "" : "?" + string.Join("&", parts);
+        }
+
+        internal IEnumerator Send<T>(string method, string path, object body, Action<T> onSuccess, Action<string> onError,
+            int timeout = 30, List<IMultipartFormSection> form = null, bool anonymous = false, bool bearerKey = false,
+            string idempotencyKey = null)
         {
             string token = null;
-            yield return ResolveToken(t => token = t);
-
-            var url = _serverUrl + EstuaryRestRoutes.UploadImageToCharacter().Path;
-
-            var form = new List<IMultipartFormSection>
+            if (!anonymous) yield return ResolveToken(t => token = t);
+            if (!anonymous && _config.TokenProvider != null && string.IsNullOrEmpty(token))
             {
-                new MultipartFormFileSection("image", imageBytes, "photo.jpg", mimeType)
+                onError?.Invoke("Authentication token provider failed; no API-key fallback was attempted.");
+                yield break;
+            }
+            var spec = new RestRequest
+            {
+                Method = method, Url = _serverUrl + path, Body = body == null ? null : JToken.FromObject(body, JsonSerializer.Create(RequestSettings)),
+                Headers = RequestHeaders(token, anonymous, bearerKey), Form = form
             };
-
-            using (var request = UnityWebRequest.Post(url, form))
+            if (!string.IsNullOrEmpty(idempotencyKey)) spec.Headers["Idempotency-Key"] = idempotencyKey;
+            RestResponse result;
+            if (TransportForTest != null) result = TransportForTest(spec);
+            else
             {
-                ApplyAuth(request, token);
-                request.timeout = 30;
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
+                using (var request = form != null ? UnityWebRequest.Post(spec.Url, form) : new UnityWebRequest(spec.Url, method))
                 {
-                    onError?.Invoke(request.error);
-                    yield break;
-                }
-
-                try
-                {
-                    var response = ParseCharacter(request.downloadHandler.text);
-                    onSuccess?.Invoke(response);
-                }
-                catch (Exception e)
-                {
-                    onError?.Invoke($"Failed to parse response: {e.Message}");
+                    request.method = method;
+                    if (form == null)
+                    {
+                        request.downloadHandler = new DownloadHandlerBuffer();
+                        if (spec.Body != null)
+                        {
+                            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(spec.Body.ToString(Formatting.None)));
+                            request.SetRequestHeader("Content-Type", "application/json");
+                        }
+                    }
+                    foreach (var header in spec.Headers) request.SetRequestHeader(header.Key, header.Value);
+                    request.timeout = timeout;
+                    // Redirects could otherwise forward credentials to a third-party host.
+                    request.redirectLimit = 0;
+                    yield return request.SendWebRequest();
+                    result = new RestResponse { Status = request.responseCode, Body = request.downloadHandler?.text, Error = request.error };
                 }
             }
+            if (result.Status < 200 || result.Status >= 300)
+            {
+                onError?.Invoke($"HTTP {result.Status}: {result.Error} {result.Body}".Trim());
+                yield break;
+            }
+            T value;
+            try { value = string.IsNullOrWhiteSpace(result.Body) ? default : JsonConvert.DeserializeObject<T>(result.Body); }
+            catch (Exception e) { onError?.Invoke($"Failed to parse response: {e.Message}"); yield break; }
+            onSuccess?.Invoke(value);
         }
 
-        /// <summary>
-        /// Gets the current model generation status via GET /api/v1/characters/{agentId}/model.
-        /// </summary>
-        public IEnumerator GetModelStatus(
-            string agentId,
-            Action<ModelStatusResponse> onSuccess, Action<string> onError)
+        internal IEnumerator SendNoContent(string method, string path, object body, Action onSuccess, Action<string> onError)
+            => Send<JToken>(method, path, body, _ => onSuccess?.Invoke(), onError);
+
+        /// <summary>Generate a character persona from an image. Optional instruction overrides use canonical camelCase keys.</summary>
+        public IEnumerator UploadImageToCharacter(byte[] imageBytes, string mimeType,
+            Action<AgentResponse> onSuccess, Action<string> onError, ImageGenerationOptions options = null, string idempotencyKey = null)
         {
-            string token = null;
-            yield return ResolveToken(t => token = t);
-
-            var url = _serverUrl + EstuaryRestRoutes.GetModelStatus(agentId).Path;
-
-            using (var request = UnityWebRequest.Get(url))
-            {
-                ApplyAuth(request, token);
-                request.timeout = 10;
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    onError?.Invoke(request.error);
-                    yield break;
-                }
-
-                try
-                {
-                    var response = JsonConvert.DeserializeObject<ModelStatusResponse>(
-                        request.downloadHandler.text);
-                    onSuccess?.Invoke(response);
-                }
-                catch (Exception e)
-                {
-                    onError?.Invoke($"Failed to parse response: {e.Message}");
-                }
-            }
+            var form = FileForm("image", imageBytes, "photo" + ImageExtension(mimeType), mimeType);
+            if (options != null)
+                foreach (var field in JObject.FromObject(options, JsonSerializer.Create(RequestSettings)))
+                    form.Add(new MultipartFormDataSection(field.Key, field.Value.Type == JTokenType.Boolean
+                        ? ((bool)field.Value ? "true" : "false") : field.Value.ToString()));
+            return Send("POST", "/api/v1/characters/from-image", null, onSuccess, onError, 60, form, idempotencyKey: idempotencyKey);
         }
 
-        /// <summary>
-        /// Triggers 3D model generation for an existing agent via POST /api/v1/characters/{agentId}/model.
-        /// Also serves as retry when previous generation failed.
-        /// The server answers 202 with {characterId, modelStatus, rigged}; only ModelStatus is
-        /// populated on the result, the URLs and progress arrive through GetModelStatus.
-        /// </summary>
-        public IEnumerator GenerateModel(
-            string agentId,
-            Action<ModelStatusResponse> onSuccess, Action<string> onError)
-        {
-            string token = null;
-            yield return ResolveToken(t => token = t);
+        /// <summary>Read model progress and rig/animation metadata.</summary>
+        public IEnumerator GetModelStatus(string agentId, Action<ModelStatusResponse> onSuccess, Action<string> onError)
+            => Send("GET", CharacterPath(agentId) + "/model", null, onSuccess, onError);
 
-            var url = _serverUrl + EstuaryRestRoutes.GenerateModel(agentId).Path;
+        /// <summary>Start or retry model generation. Set rigged for the animated humanoid pipeline.</summary>
+        public IEnumerator GenerateModel(string agentId, Action<ModelStatusResponse> onSuccess, Action<string> onError, bool rigged = false)
+            => Send("POST", CharacterPath(agentId) + "/model", rigged ? new { rigged = true } : null, onSuccess, onError);
 
-            using (var request = new UnityWebRequest(url, "POST"))
-            {
-                request.uploadHandler = new UploadHandlerRaw(new byte[0]);
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "application/json");
-                ApplyAuth(request, token);
-                request.timeout = 30;
+        /// <summary>Legacy unpaginated list retained for source and behavior compatibility. Use ListCharacters for v1 pagination.</summary>
+        public IEnumerator GetAgents(Action<List<AgentResponse>> onSuccess, Action<string> onError)
+            => Send("GET", "/api/agents", null, onSuccess, onError);
 
-                yield return request.SendWebRequest();
+        /// <summary>Delete a character and its associated data.</summary>
+        public IEnumerator DeleteAgent(string agentId, Action onSuccess, Action<string> onError)
+            => SendNoContent("DELETE", CharacterPath(agentId), null, onSuccess, onError);
 
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    onError?.Invoke(request.error);
-                    yield break;
-                }
-
-                try
-                {
-                    var response = JsonConvert.DeserializeObject<ModelStatusResponse>(
-                        request.downloadHandler.text);
-                    onSuccess?.Invoke(response);
-                }
-                catch (Exception e)
-                {
-                    onError?.Invoke($"Failed to parse response: {e.Message}");
-                }
-            }
-        }
+        internal static List<IMultipartFormSection> FileForm(string field, byte[] bytes, string filename, string mimeType)
+            => new List<IMultipartFormSection> { new MultipartFormFileSection(field, bytes, filename, mimeType) };
+        private static string ImageExtension(string mime) => mime == "image/png" ? ".png" : mime == "image/webp" ? ".webp" : ".jpg";
 
         /// <summary>
         /// Downloads a GLB file from a URL and returns the raw bytes.
@@ -290,73 +196,6 @@ namespace Estuary
                 }
 
                 onSuccess?.Invoke(request.downloadHandler.data);
-            }
-        }
-
-        /// <summary>
-        /// Gets all agents/characters for the authenticated user via GET /api/agents.
-        /// Returns a simple JSON array (no pagination).
-        /// Deliberately still on the legacy route: GET /api/v1/characters is paginated (max 100)
-        /// and this method has no paging parameters, so callers expect every character.
-        /// </summary>
-        public IEnumerator GetAgents(Action<List<AgentResponse>> onSuccess, Action<string> onError)
-        {
-            string token = null;
-            yield return ResolveToken(t => token = t);
-
-            var url = _serverUrl + EstuaryRestRoutes.GetAgents().Path;
-
-            using (var request = UnityWebRequest.Get(url))
-            {
-                ApplyAuth(request, token);
-                request.timeout = 10;
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    onError?.Invoke(request.error);
-                    yield break;
-                }
-
-                try
-                {
-                    var agents = JsonConvert.DeserializeObject<List<AgentResponse>>(
-                        request.downloadHandler.text);
-                    onSuccess?.Invoke(agents);
-                }
-                catch (Exception e)
-                {
-                    onError?.Invoke($"Failed to parse response: {e.Message}");
-                }
-            }
-        }
-
-        /// <summary>
-        /// Deletes an agent/character via DELETE /api/v1/characters/{agentId}.
-        /// Returns 200 on success (body ignored), 404 if not found or not owned by user.
-        /// </summary>
-        public IEnumerator DeleteAgent(string agentId, Action onSuccess, Action<string> onError)
-        {
-            string token = null;
-            yield return ResolveToken(t => token = t);
-
-            var url = _serverUrl + EstuaryRestRoutes.DeleteAgent(agentId).Path;
-
-            using (var request = UnityWebRequest.Delete(url))
-            {
-                ApplyAuth(request, token);
-                request.timeout = 10;
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    onError?.Invoke(request.error);
-                    yield break;
-                }
-
-                onSuccess?.Invoke();
             }
         }
 
@@ -414,7 +253,7 @@ namespace Estuary
                 // Terminal states
                 // texture_failed = partial success (preview is usable, textures didn't apply)
                 // Treat as completion so the model viewer can display preview with a notice.
-                if (status.IsCompleted || status.IsTextureFailed)
+                if (status.IsCompleted || status.IsPartialSuccess)
                 {
                     onCompleted?.Invoke(status);
                     yield break;
@@ -430,5 +269,21 @@ namespace Estuary
                 interval = Mathf.Min(interval * 1.5f, maxInterval);
             }
         }
+    }
+
+    internal sealed class RestRequest
+    {
+        public string Method;
+        public string Url;
+        public JToken Body;
+        public Dictionary<string, string> Headers;
+        public List<IMultipartFormSection> Form;
+    }
+
+    internal sealed class RestResponse
+    {
+        public long Status;
+        public string Body;
+        public string Error;
     }
 }

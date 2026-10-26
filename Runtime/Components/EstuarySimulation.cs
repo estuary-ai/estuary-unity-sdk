@@ -267,7 +267,8 @@ namespace Estuary
                       UnityWebRequest.EscapeURL(worldId);
             var request = UnityWebRequest.Delete(url);
             request.SetRequestHeader("X-API-Key", config.ApiKey);
-            request.SetRequestHeader(EstuarySdkInfo.ClientHeaderName, EstuarySdkInfo.ClientHeaderValue);
+            request.SetRequestHeader("X-Estuary-Client", EstuarySdk.ClientIdentification);
+            request.redirectLimit = 0;
             request.timeout = 10;
             var op = request.SendWebRequest();
             op.completed += _ => request.Dispose();

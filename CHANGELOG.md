@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Remove the world-model integration (contract v1.39): the backend feature was never finished and the gateway no longer handles its events. Deleted `EstuaryWebcam`, `LiveKitVideoManager`, `ILiveKitVideoManager`, `DirectWebcamVideoSource`, `WebcamVideoSource`, the `SceneGraph`/`SceneGraphUpdate`/`RoomIdentified` and video-frame/device-pose payload models, `EstuaryClient.OnSceneGraphUpdate`, `OnRoomIdentified`, `EnableLiveKitVideoAsync`, `DisableLiveKitVideoAsync`, and `LiveKitBridge.RegisterVideoManagerFactory`/`CreateVideoManager`. Scenes with an `EstuaryWebcam` component will show a missing-script warning; remove the component. On-demand vision (`SendCameraImage`, `OnCameraCaptureRequested`) is unchanged.
+
+### Changed
+
+- Raise the minimum Unity version to 2022.3 to match LiveKit SDK 2.1.0.
+- Remove the `EstuaryCharacter` **Strip Actions From Text** Inspector option. Typed `client_action` events handle actions, and response text now passes through unchanged. `ActionParser.StripActions` remains available for legacy text.
+- Make `PushToTalkEnabled` the sole PTT switch. The Inspector disables `PushToTalkKey` while PTT is off, and runtime ignores a previously assigned key; existing key-only scenes must enable the checkbox.
+- Remove local microphone VAD settings, WebSocket silence gating, and duplicate LiveKit microphone capture. Server-confirmed speech now drives automatic interrupts; push-to-talk still gates audio explicitly.
+- Remove `IsSpeechDetected`, `OnSpeechDetected`, `OnSilenceDetected`, and `EstuaryAudioSource.SetMicrophoneReference`, along with the microphone-based auto-interrupt Inspector setting. Use `EstuaryCharacter.OnTranscript` and `OnInterrupt` for speech and barge-in events.
+- Migrate generation/delete/model status to canonical v1 REST paths and identify every API request with `X-Estuary-Client`; retain the unpaginated `GetAgents` compatibility route.
+- Disable executable XML action parsing; typed `client_action` remains the action source.
+- Track WebSocket playback by final packet, message ID and local render deadline; reset on disconnect and isolate streaming text by message ID.
+
+
+- Skip optional dependency prompts during batch-mode tests/builds; clarify that WebSocket voice works without LiveKit.
+- Updated the LiveKit Editor auto-installer to v2.1.0. LiveKit voice now requires Unity 2022.3 or newer.
+- Handle LiveKit v2.1.0 client disconnect callbacks once, preserving the local disconnect reason during voice teardown.
+
 ### Added
+
+- Character CRUD/transfer/motives/tool testing, avatar/model uploads, conversations/history, memory reads/search/writes, shares, and HTTP turns with incremental NDJSON streaming.
+- Delegation, structured API results, moderation and structured server errors through all client layers. Moderation redacts matching content and suppresses automatic reconnect on termination.
+- Rigged model generation/status/fallback metadata and `EstuaryClipPlayer` for imported glTF skeletal clips. Audio2Face remains excluded.
+- Optional LiveKit speaking-state/message-ID attributes.
+- Simulation motive override and seed motive parameter; shared REST auth/headers/errors.
+- Shared REST conformance fixtures and Unity regression tests for events, playback, streaming, auth and model behavior.
+
 
 - **Character Simulation (v1)**: run the Estuary simulation on your own characters
   - **EstuarySimulation**: component for streaming + triggering conversations on a world instance
@@ -15,12 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **EstuarySimulationStream**: live `/sim-v1` Socket.IO stream (messages, tool calls, lore, world-view updates)
   - Simulation data models in `Estuary.Models` (`SimulationWorld`, `SimulationInstance`, `SimulationEvent`, `SimulationWorldView`, ...)
   - **Session isolation** (contract v1.6): `Destroy World On End` inspector toggle + `EndWorld()` on `EstuarySimulation` delete the world server-side when the session ends — the next world starts fresh with no bleed-through memories; `ClearWorldMemories()` (component + `EstuarySimulationApi`) soft-resets a world by deleting every memory its simulation created while keeping the world, instances, lore, and transcripts
-- **Client identification** (SCRUM-255): every Estuary REST request now sends `X-Estuary-Client: estuary-unity-sdk/<version>`. The version comes from the new `EstuarySdkInfo.Version` constant, which an EditMode test keeps equal to `package.json`. Not sent on GLB downloads or on socket connections
-- **REST conformance tests**: `Tests/Editor/RestConformanceTests.cs` checks the SDK's REST routes and headers against the monorepo's `sdk-conformance/rest.json`
-
-### Changed
-
-- **Canonical REST routes** (SCRUM-255): `UploadImageToCharacter` now calls `POST /api/v1/characters/from-image`, `GenerateModel` calls `POST /api/v1/characters/{id}/model`, `GetModelStatus`/`PollModelStatus` call `GET /api/v1/characters/{id}/model`, and `DeleteAgent` calls `DELETE /api/v1/characters/{id}`. Method signatures and result types are unchanged. `AgentResponse.ModelProvider` on the `UploadImageToCharacter` result is filled from the v1 `model_provider` field when the gateway sends it, and stays null against an older gateway that does not. `GetAgents` stays on `GET /api/agents` for now (the v1 list is paginated and `GetAgents` has no paging parameters). Requires a gateway that serves these `/api/v1` routes
 
 ## [1.0.0] - 2024-12-16
 
@@ -57,9 +79,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Socket.IO implementation is basic; for production, integrate with [SocketIOClient](https://github.com/doghappy/socket.io-client-csharp)
 - MP3 decoding not included; server should send PCM or WAV format
 - No built-in UI; use sample scripts as reference for your own implementation
-
-
-
-
 
 

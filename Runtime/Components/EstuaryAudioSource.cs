@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -32,14 +33,6 @@ namespace Estuary
         [Header("Playback Settings")]
         [Tooltip("Expected sample rate from server (matches Unity's audio output rate)")]
         private int expectedSampleRate => AudioSettings.outputSampleRate;
-
-        [SerializeField]
-        [Tooltip("Stop playback when user starts speaking")]
-        private bool autoInterruptOnUserSpeech = true;
-
-        [SerializeField]
-        [Tooltip("Reference to microphone for interrupt detection")]
-        private EstuaryMicrophone microphoneRef;
 
         [Header("Events")]
         [SerializeField]
@@ -122,6 +115,13 @@ namespace Estuary
         #region Private Fields
 
         private string _currentlyPlayingMessageId;
+        private readonly AudioPlaybackTracker _playbackTracker = new AudioPlaybackTracker();
+        private double _outputLatency;
+        private double _nextRenderTime;
+        private int _playbackGeneration;
+
+        /// <summary>Fired after the final PCM for this message has rendered locally.</summary>
+        public event Action<string> OnMessagePlaybackComplete;
 
         // LiveKit mode fields
         private ILiveKitVoiceManager _liveKitManager;
@@ -177,23 +177,8 @@ namespace Estuary
             InitializeStreamingBuffer();
         }
 
-        private void OnEnable()
-        {
-            // Subscribe to microphone events for auto-interrupt
-            if (autoInterruptOnUserSpeech && microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected += HandleUserSpeechDetected;
-            }
-        }
-
         private void OnDisable()
         {
-            // Unsubscribe from microphone events
-            if (microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected -= HandleUserSpeechDetected;
-            }
-
             StopPlayback();
             CleanupStreamingBuffer();
         }
@@ -220,7 +205,13 @@ namespace Estuary
                 return;
             }
 
-            if (voice == null || voice.DecodedAudio.Length == 0)
+            if (voice == null) return;
+            if (voice.IsFinal && voice.DecodedAudio.Length == 0)
+            {
+                MarkAudioComplete(voice.MessageId);
+                return;
+            }
+            if (voice.DecodedAudio.Length == 0)
             {
                 Debug.LogWarning("[EstuaryAudioSource] Received empty audio data");
                 return;
@@ -253,7 +244,9 @@ namespace Estuary
             Debug.Log($"[EstuaryAudioSource] Writing {samples.Length} samples to ring buffer (chunk {voice.ChunkIndex})");
 
             // Write samples to ring buffer
-            WriteToRingBuffer(samples);
+            WriteToRingBuffer(samples, voice.MessageId);
+            // Legacy filler interjections are delivered as a single complete PCM packet.
+            if (voice.IsFinal || voice.IsInterjection) MarkAudioComplete(voice.MessageId);
 
             // Start streaming playback if not already running
             if (!_isStreamingActive)
@@ -268,7 +261,7 @@ namespace Estuary
         /// </summary>
         /// <param name="audioBytes">PCM16 audio bytes</param>
         /// <param name="sampleRate">Sample rate of the audio</param>
-        /// <param name="messageId">Optional message ID</param>
+        /// <param name="messageId">Optional message ID. Call MarkAudioComplete after its final raw chunk.</param>
         public void EnqueueAudio(byte[] audioBytes, int sampleRate, string messageId = null)
         {
             // LiveKit handles its own audio via AudioStream - don't process here
@@ -308,7 +301,7 @@ namespace Estuary
             }
 
             // Write samples to ring buffer
-            WriteToRingBuffer(samples);
+            WriteToRingBuffer(samples, messageId);
 
             // Start streaming playback if not already running
             if (!_isStreamingActive)
@@ -318,11 +311,18 @@ namespace Estuary
             }
         }
 
+        /// <summary>Mark the last raw PCM chunk for a message. BotVoice callers use IsFinal automatically.</summary>
+        public void MarkAudioComplete(string messageId)
+        {
+            lock (_streamingLock) _playbackTracker.MarkFinal(messageId);
+        }
+
         /// <summary>
         /// Stop current playback and clear the streaming buffer.
         /// </summary>
         public void StopPlayback()
         {
+            _playbackGeneration++;
             // Stop streaming playback coroutine
             if (_streamingPlaybackCoroutine != null)
             {
@@ -337,10 +337,17 @@ namespace Estuary
                 audioSource.loop = false;
             }
 
+            if (_streamingClip != null)
+            {
+                Destroy(_streamingClip);
+                _streamingClip = null;
+            }
+
             // Clear streaming buffer
             ClearStreamingBuffer();
 
             _currentlyPlayingMessageId = null;
+            CurrentMessageId = null;
             _isStreamingActive = false;
             _streamingClipPlaying = false;
 
@@ -370,25 +377,21 @@ namespace Estuary
             }
         }
 
-        /// <summary>
-        /// Set the microphone reference for auto-interrupt.
-        /// </summary>
-        /// <param name="microphone">Microphone component</param>
-        public void SetMicrophoneReference(EstuaryMicrophone microphone)
+        /// <summary>Remove a moderated message's queued PCM without discarding a newer message.</summary>
+        public void RedactMessage(string messageId)
         {
-            // Unsubscribe from old
-            if (microphoneRef != null)
+            if (string.IsNullOrEmpty(messageId)) return;
+            if (_currentlyPlayingMessageId == messageId)
             {
-                microphoneRef.OnSpeechDetected -= HandleUserSpeechDetected;
+                StopPlayback();
+                return;
             }
-
-            microphoneRef = microphone;
-
-            // Subscribe to new
-            if (autoInterruptOnUserSpeech && microphoneRef != null)
-            {
-                microphoneRef.OnSpeechDetected += HandleUserSpeechDetected;
-            }
+            lock (_streamingLock)
+                _playbackTracker.Redact(messageId, (offset, count) =>
+                {
+                    for (int i = 0; i < count; i++)
+                        _ringBuffer[(_readPosition + offset + i) % _ringBufferSize] = 0f;
+                });
         }
 
         /// <summary>
@@ -439,6 +442,8 @@ namespace Estuary
         {
             // Use expected sample rate for buffer (incoming audio will be resampled if needed)
             _streamingSampleRate = expectedSampleRate;
+            AudioSettings.GetDSPBufferSize(out var bufferLength, out var bufferCount);
+            _outputLatency = (double)bufferLength * bufferCount / _streamingSampleRate;
 
             // Calculate fade-out samples based on actual sample rate (10ms fade)
             _fadeOutSamples = (int)(_streamingSampleRate * FADE_OUT_MS / 1000f);
@@ -487,6 +492,8 @@ namespace Estuary
                 _writePosition = 0;
                 _readPosition = 0;
                 _samplesAvailable = 0;
+                _playbackTracker.Reset();
+                _nextRenderTime = 0;
             }
         }
 
@@ -504,6 +511,8 @@ namespace Estuary
                 _writePosition = 0;
                 _readPosition = 0;
                 _samplesAvailable = 0;
+                _playbackTracker.Reset();
+                _nextRenderTime = 0;
             }
 
             _hasStartedPlaying = false;
@@ -521,7 +530,7 @@ namespace Estuary
         /// <summary>
         /// Write audio samples to the ring buffer for streaming playback.
         /// </summary>
-        private void WriteToRingBuffer(float[] samples)
+        private void WriteToRingBuffer(float[] samples, string messageId)
         {
             if (samples == null || samples.Length == 0)
                 return;
@@ -531,6 +540,11 @@ namespace Estuary
                 if (_ringBuffer == null)
                     return;
 
+                _playbackTracker.Enqueue(messageId, samples.Length);
+                int overflow = Math.Max(0, _samplesAvailable + samples.Length - _ringBufferSize);
+                if (overflow > 0)
+                    _playbackTracker.Consume(overflow, AudioSettings.dspTime,
+                        _streamingSampleRate * _streamingChannels, _outputLatency);
                 for (int i = 0; i < samples.Length; i++)
                 {
                     _ringBuffer[_writePosition] = samples[i];
@@ -556,19 +570,20 @@ namespace Estuary
 
             // Calculate pre-buffer threshold in samples
             int preBufferSamples = (int)(_streamingSampleRate * _streamingChannels * MIN_BUFFER_BEFORE_PLAY);
-            float emptyBufferTime = 0f;
-            const float maxEmptyBufferWait = 1.0f; // Consider stream ended after 1s of empty buffer
+            int generation = _playbackGeneration;
 
             // Wait for minimum buffer before starting playback
             while (_isStreamingActive)
             {
                 int available;
+                bool finalReceived;
                 lock (_streamingLock)
                 {
                     available = _samplesAvailable;
+                    finalReceived = _playbackTracker.HasFinal;
                 }
 
-                if (available >= preBufferSamples)
+                if (available >= preBufferSamples || (available > 0 && finalReceived))
                 {
                     Debug.Log($"[EstuaryAudioSource] Pre-buffer threshold reached: {available} samples ({(float)available / _streamingSampleRate / _streamingChannels * 1000:F0}ms)");
                     break;
@@ -607,56 +622,28 @@ namespace Estuary
                 onPlaybackStarted?.Invoke();
                 Debug.Log("[EstuaryAudioSource] Started WebSocket streaming playback");
             }
+            if (generation != _playbackGeneration) yield break;
 
-            // Monitor buffer and detect end of stream
-            int bufferLogCounter = 0;
-            const int bufferLogInterval = 20; // Log every ~1 second (20 * 0.05s)
-            int lowBufferWarnings = 0;
-            int lowBufferThresholdSamples = (int)(_streamingSampleRate * _streamingChannels * BUFFER_LOW_THRESHOLD);
-            
+            // A final packet closes a message, but completion waits for local
+            // rendering. An underrun alone never means the server has finished.
             while (_isStreamingActive && _streamingClipPlaying)
             {
-                int available;
+                List<string> completed;
                 lock (_streamingLock)
+                    completed = _playbackTracker.TakeCompleted(AudioSettings.dspTime);
+                foreach (var messageId in completed)
                 {
-                    available = _samplesAvailable;
+                    // Report before callbacks: a subscriber can dispatch a new
+                    // response or disconnect synchronously from its callback.
+                    NotifyPlaybackComplete(messageId);
+                    OnMessagePlaybackComplete?.Invoke(messageId);
+                    if (generation != _playbackGeneration) yield break;
                 }
-
-                if (available == 0)
-                {
-                    emptyBufferTime += 0.05f;
-                    
-                    if (emptyBufferTime >= maxEmptyBufferWait)
-                    {
-                        // Stream appears to have ended
-                        Debug.Log("[EstuaryAudioSource] Stream ended (buffer empty for 1s)");
-                        break;
-                    }
-                }
-                else
-                {
-                    emptyBufferTime = 0f;
-                    
-                    // Warn if buffer is running low (potential underrun)
-                    if (available < lowBufferThresholdSamples)
-                    {
-                        lowBufferWarnings++;
-                        float bufferMs = (float)available / _streamingSampleRate / _streamingChannels * 1000;
-                        Debug.LogWarning($"[EstuaryAudioSource] Buffer low: {bufferMs:F0}ms remaining (threshold: {BUFFER_LOW_THRESHOLD * 1000:F0}ms)");
-                    }
-                }
-
-                // Periodic buffer health log
-                bufferLogCounter++;
-                if (bufferLogCounter >= bufferLogInterval)
-                {
-                    bufferLogCounter = 0;
-                    float fillPercent = (float)available / _ringBufferSize * 100;
-                    float bufferMs = (float)available / _streamingSampleRate / _streamingChannels * 1000;
-                    Debug.Log($"[EstuaryAudioSource] Buffer health: {fillPercent:F1}% ({bufferMs:F0}ms), low warnings: {lowBufferWarnings}");
-                }
-
-                yield return new WaitForSeconds(0.05f);
+                bool drained;
+                lock (_streamingLock)
+                    drained = _playbackTracker.PendingCount == 0 && _samplesAvailable == 0;
+                if (drained) break;
+                yield return null;
             }
 
             // Stop playback
@@ -667,17 +654,8 @@ namespace Estuary
             }
             _streamingClipPlaying = false;
 
-            // Fire playback complete event
-            if (_hasStartedPlaying)
-            {
-                _hasStartedPlaying = false;
-                OnPlaybackComplete?.Invoke();
-                onPlaybackComplete?.Invoke();
-                Debug.Log("[EstuaryAudioSource] WebSocket streaming playback complete");
-
-                // Notify server
-                NotifyPlaybackComplete();
-            }
+            bool played = _hasStartedPlaying;
+            _hasStartedPlaying = false;
 
             // Cleanup
             if (_streamingClip != null)
@@ -692,11 +670,21 @@ namespace Estuary
                 _writePosition = 0;
                 _readPosition = 0;
                 _samplesAvailable = 0;
+                _playbackTracker.Reset();
+                _nextRenderTime = 0;
             }
             _hasLoggedResample = false;
 
             _isStreamingActive = false;
             _streamingPlaybackCoroutine = null;
+            CurrentMessageId = _currentlyPlayingMessageId = null;
+
+            // Complete cleanup before user callbacks, which may enqueue another turn.
+            if (played)
+            {
+                OnPlaybackComplete?.Invoke();
+                onPlaybackComplete?.Invoke();
+            }
         }
 
         /// <summary>
@@ -742,6 +730,12 @@ namespace Estuary
                 }
                 
                 _samplesAvailable -= samplesToRead;
+                // Unity may prefetch multiple PCM blocks at the same DSP time.
+                // Include queued silence so later chunks cannot complete early.
+                double blockStart = Math.Max(AudioSettings.dspTime, _nextRenderTime);
+                double samplesPerSecond = _streamingSampleRate * _streamingChannels;
+                _nextRenderTime = blockStart + data.Length / samplesPerSecond;
+                _playbackTracker.Consume(samplesToRead, blockStart, samplesPerSecond, _outputLatency);
 
                 // Fill remaining with silence (after fade-out, so no click)
                 if (samplesToRead < data.Length)
@@ -764,13 +758,13 @@ namespace Estuary
 
         #region Private Methods
 
-        private async void NotifyPlaybackComplete()
+        private async void NotifyPlaybackComplete(string messageId)
         {
             try
             {
                 if (EstuaryManager.HasInstance && EstuaryManager.Instance.IsConnected)
                 {
-                    await EstuaryManager.Instance.NotifyAudioPlaybackCompleteAsync();
+                    await EstuaryManager.Instance.NotifyAudioPlaybackCompleteAsync(messageId);
                 }
             }
             catch (Exception e)
@@ -779,39 +773,9 @@ namespace Estuary
             }
         }
 
-        private void HandleUserSpeechDetected()
-        {
-            if (autoInterruptOnUserSpeech && IsPlaying)
-            {
-                Debug.Log("[EstuaryAudioSource] User speech detected, interrupting playback and notifying server");
-                StopPlayback();
-                
-                // CRITICAL: Also notify the server to stop generating audio
-                // Without this, the server keeps generating TTS even though we stopped playback locally
-                NotifyServerInterrupt();
-            }
-        }
-
-        private async void NotifyServerInterrupt()
-        {
-            try
-            {
-                if (EstuaryManager.HasInstance && EstuaryManager.Instance.IsConnected)
-                {
-                    await EstuaryManager.Instance.NotifyInterruptAsync(CurrentMessageId);
-                    Debug.Log($"[EstuaryAudioSource] Notified server of interrupt (messageId: {CurrentMessageId ?? "none"})");
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[EstuaryAudioSource] Failed to notify server of interrupt: {e.Message}");
-            }
-        }
-
         #endregion
     }
 }
-
 
 
 

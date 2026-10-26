@@ -15,18 +15,17 @@ Unity SDK for integrating Estuary AI characters with real-time voice and text ch
 - **Vision (VLM)**: Send camera images for the character to "see" (`SendCameraImage`), and respond to the server's proactive capture requests (`OnCameraCaptureRequested`)
 - **Conversation Persistence**: Conversations are persisted per player-character pair
 - **Memory Push**: Receive newly extracted memories in real time after a conversation (`OnMemoryUpdated`)
-- **Action Parsing**: Parse XML-style action tags from bot responses (e.g., `<action name="wave" />`)
+- **Typed Actions**: Receive validated action events and route them to gameplay or imported animation clips
 - **Session Lifecycle**: First-class handling of idle `session_timeout` / `voice_timeout` reaps and policy `session_rejected` (concurrent-session cap) — all with correct no-auto-reconnect suppression
 - **Device Capabilities**: Declare camera/mic/speaker availability per session so the character only offers tools the device supports
-- **World Model Integration**: Stream webcam video (LiveKit or WebSocket) for spatial awareness + scene-graph updates
 - **3D Character Models**: Download a character's Estuary-generated 3D model (GLB) and instantiate it as a GameObject at runtime (`EstuaryModelLoader`). Requires the optional glTFast importer.
 - **Character Simulation**: Build worlds of your characters, trigger character-to-character conversations, and stream them live — including the evolving per-instance world-view document (`EstuarySimulation`)
 
 ## Requirements
 
-- Unity 2021.3 LTS or newer
+- Unity 2022.3 LTS or newer
 - .NET Standard 2.1 or .NET 4.x
-- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v2.0.0+
+- [LiveKit Unity SDK](https://github.com/livekit/client-sdk-unity) v2.1.0+
 
 ## Installation
 
@@ -39,13 +38,15 @@ Unity Package Manager does not resolve transitive Git URL dependencies, so you m
 3. Select `Add package from git URL...`
 4. Add the **LiveKit SDK** first:
    ```
-   https://github.com/livekit/client-sdk-unity.git#v2.0.0
+   https://github.com/livekit/client-sdk-unity.git#v2.1.0
    ```
 5. Click `+` > `Add package from git URL...` again
 6. Add the **Estuary SDK**:
    ```
    https://github.com/Estuary-AI/estuary-unity-sdk.git
    ```
+
+If your project already has an older LiveKit version, update its Git URL in Package Manager to the v2.1.0 tag above.
 
 > **Auto-installer:** If you skip step 4, the SDK includes an Editor auto-installer that will detect the missing LiveKit dependency and offer to install it for you — along with the built-in `com.unity.modules.screencapture` module that LiveKit's video capture requires (without it you'd hit `The name 'ScreenCapture' does not exist` errors on a lean/URP project). Adding LiveKit first (as shown above) is still the recommended approach.
 
@@ -191,14 +192,18 @@ Attach to any GameObject that should be an AI character.
 
 Captures microphone audio for voice chat.
 
+Speech detection, turn completion, and speech-triggered interrupts run on the server for
+both LiveKit and WebSocket voice. The microphone sends continuous audio while unmuted,
+or only while the button is held in push-to-talk mode. There is no local VAD setting.
+
 | Property | Description |
 |----------|-------------|
 | `IsRecording` | Whether currently recording |
 | `IsMuted` | Whether microphone is muted |
 | `IsLiveKitMode` | Using LiveKit native capture |
-| `PushToTalkKey` | Key for push-to-talk (None = no key binding) |
-| `PushToTalkEnabled` | Push-to-talk without a key — drive `PushToTalkPress()`/`PushToTalkRelease()` yourself |
-| `IsPushToTalkMode` | Whether PTT is active (key bound or explicitly enabled) |
+| `PushToTalkKey` | Optional key to hold while PTT is enabled (`None` = no key binding) |
+| `PushToTalkEnabled` | Turns PTT on or off; with no key, drive `PushToTalkPress()`/`PushToTalkRelease()` yourself |
+| `IsPushToTalkMode` | Whether PTT is enabled |
 | `IsPushToTalkHeld` | Whether the talk button is currently held |
 
 #### Push-to-Talk
@@ -206,9 +211,9 @@ Captures microphone audio for voice chat.
 Hold-to-talk with server-side turn handling (contract v1.11): while the button is
 held the server buffers speech instead of answering over you; release dispatches
 exactly one turn. The talk button only works during an active voice session
-(`StartVoiceSession()`); presses outside one are ignored. Set `Push To Talk Key` in
-the Inspector (e.g. Space), or tick `Push To Talk Enabled` and drive it from your
-own input (touch/XR):
+(`StartVoiceSession()`); presses outside one are ignored. Tick `Push To Talk Enabled`
+in the Inspector, then optionally set `Push To Talk Key` (e.g. Space). Without a key,
+drive it from your own input (touch/XR):
 
 ```csharp
 microphone.PushToTalkPress();    // button down — interrupts the bot, opens the mic
@@ -216,10 +221,15 @@ microphone.PushToTalkRelease();  // button up — server finalizes and dispatche
 ```
 
 Works on both transports: LiveKit (track unmute/mute) and WebSocket (chunk gating).
+The key field is disabled when PTT is off, and a previously assigned key is ignored.
+Existing scenes that relied on a key alone must also enable the checkbox.
 
 ### EstuaryAudioSource
 
 Plays bot voice audio responses.
+
+Server-confirmed interrupts stop playback and clear queued audio. Use
+`EstuaryCharacter.OnInterrupt` to respond to a barge-in.
 
 | Property | Description |
 |----------|-------------|
@@ -252,13 +262,9 @@ Fallback mode that streams audio over Socket.IO:
 config.VoiceMode = VoiceMode.WebSocket;
 ```
 
-## Action Parsing
+## Typed Actions
 
-Bot responses can include XML-style action tags:
-
-```xml
-Hello! <action name="wave" /> Nice to meet you!
-```
+Characters invoke declared actions through `client_action` events. The SDK negotiates this protocol automatically; XML tags in prose never execute. Actions fire on arrival, independently of TTS playback.
 
 Subscribe to action events:
 
@@ -277,115 +283,9 @@ character.OnActionReceived += (AgentAction action) =>
 };
 ```
 
-Action tags are automatically stripped from `CurrentPartialResponse` if `StripActionsFromText` is enabled.
-
-## World Model / Webcam Streaming
-
-The `EstuaryWebcam` component enables spatial awareness by streaming webcam video to the world model service.
-
-### Setup
-
-```csharp
-public class WorldModelExample : MonoBehaviour
-{
-    public EstuaryCharacter character;
-    public EstuaryWebcam webcam;
-
-    void Start()
-    {
-        character.OnConnected += OnConnected;
-        webcam.OnSceneGraphUpdated += OnSceneGraphUpdated;
-    }
-
-    void OnConnected(SessionInfo session)
-    {
-        // Start webcam streaming with the session ID
-        webcam.StartStreaming(session.SessionId);
-    }
-
-    void OnSceneGraphUpdated(SceneGraph graph)
-    {
-        Debug.Log($"Scene: {graph.Summary}");
-        Debug.Log($"Entities: {graph.EntityCount}");
-        
-        foreach (var entity in graph.Entities)
-        {
-            Debug.Log($"  - {entity.Label} at {entity.Position}");
-        }
-    }
-}
-```
-
-### Streaming Modes
-
-#### LiveKit Mode (Recommended)
-
-Uses LiveKit WebRTC video tracks for lower latency streaming:
-- Requires LiveKit SDK installed
-- Uses existing LiveKit room connection (from voice chat)
-- Native video codec for better quality/bandwidth
-- Desktop/Mobile only (not WebGL)
-
-```csharp
-webcam.StreamMode = WebcamStreamMode.LiveKit;
-webcam.StartStreaming(session.SessionId);
-```
-
-#### WebSocket Mode (Fallback)
-
-Sends base64-encoded JPEG frames over Socket.IO:
-- Works on all platforms including WebGL
-- Higher latency than LiveKit
-- Configurable JPEG quality
-
-```csharp
-webcam.StreamMode = WebcamStreamMode.WebSocket;
-webcam.StartStreaming(session.SessionId);
-```
-
-### EstuaryWebcam Properties
-
-| Property | Default | Description |
-|----------|---------|-------------|
-| `StreamMode` | `LiveKit` | Streaming method (LiveKit or WebSocket) |
-| `AutoFallback` | `true` | Fall back to WebSocket if LiveKit unavailable |
-| `TargetFps` | `10` | Target frames per second |
-| `TargetWidth` | `1280` | Capture resolution width |
-| `TargetHeight` | `720` | Capture resolution height |
-| `JpegQuality` | `75` | JPEG quality for WebSocket mode |
-| `UseFrontCamera` | `false` | Prefer front-facing camera |
-| `SendPose` | `false` | Send camera pose with frames (AR) |
-| `AutoSubscribeSceneGraph` | `true` | Auto-subscribe to scene updates |
-
-### Scene Graph Events
-
-```csharp
-webcam.OnSceneGraphUpdated += (SceneGraph graph) =>
-{
-    // Access detected entities
-    foreach (var entity in graph.Entities)
-    {
-        string name = entity.Label;
-        Vector3 pos = entity.Position;
-        float distance = entity.DistanceFromUser;
-    }
-    
-    // Access spatial relationships
-    foreach (var rel in graph.Relationships)
-    {
-        // e.g., "cup on table", "person next_to chair"
-        Debug.Log($"{rel.SubjectId} {rel.Predicate} {rel.ObjectId}");
-    }
-    
-    // Scene summary
-    Debug.Log(graph.Summary);  // "Indoor office with person at desk"
-};
-
-webcam.OnRoomIdentified += (RoomIdentified room) =>
-{
-    Debug.Log($"Location: {room.RoomName}");  // "Living Room"
-};
-```
+The server keeps legacy action tags out of response text on the typed action path.
+`EstuaryCharacter` passes response text through unchanged; use
+`ActionParser.StripActions` only when displaying text from an older source.
 
 ## 3D Character Models
 
@@ -450,8 +350,58 @@ untextured preview) have a loadable model. To generate one first, call
 | `OnModelLoaded(GameObject)` | Fired on a successful load |
 | `OnModelLoadFailed(string)` | Fired with an error message on failure |
 
-> **Note:** models load as **static meshes** (no glTF skeletal-animation playback yet). Drive
-> them with your own animator/behavior scripts, as the Vision Pro client does for its characters.
+To generate an animated humanoid, call `GenerateModel(id, onSuccess, onError, rigged: true)`.
+`ModelStatusResponse` exposes `Rigged`, `Animations`, and all intermediate stages. A
+`rig_failed` or `animation_failed` result with `ModelUrl` is usable as a static fallback.
+
+Add **Estuary Clip Player** beside `EstuaryCharacter` and `EstuaryModelLoader` to play
+imported skeletal clips from actions. It selects an exact clip name or a unique suffix
+(`wave` → `preset:biped:wave`); ambiguous names are rejected. Idle/walk/run loop; other
+clips return to idle. Audio2Face is not part of this adapter.
+
+## REST, rich results, and moderation
+
+`EstuaryHttpClient` now covers character CRUD/transfer/motives and uploads, conversation
+history, memory reads/search/writes, shares, and single or streaming text-only HTTP turns.
+Start methods as Unity coroutines; callbacks run as the coroutine is pumped. Use
+`ListCharacters` for paginated v1 reads. `GetAgents` retains its unpaginated legacy behavior.
+REST calls send `X-Estuary-Client`, honor `TokenProvider`, `PlayerId` and `OrgId`, and return
+HTTP status plus server details on failure. A failing token provider never falls back to
+an API key. Asset downloads and anonymous share redemption do not forward your credentials.
+
+```csharp
+var http = new EstuaryHttpClient(config) { PlayerId = playerId };
+StartCoroutine(http.GetMessages(characterId, playerId,
+    page => Debug.Log($"Loaded {page.Messages.Length} messages"), Debug.LogError));
+StartCoroutine(http.SearchMemories(characterId, playerId, "favorite tea",
+    result => Debug.Log($"Found {result.Total} memories"), Debug.LogError));
+StartCoroutine(http.StreamTurn(characterId,
+    new CharacterTurnRequest { Message = "Hello", PlayerId = playerId },
+    evt => Debug.Log(evt.Type), reply => Debug.Log(reply.Text), Debug.LogError));
+```
+
+New events on `EstuaryCharacter`, `EstuaryManager`, and `EstuaryClient`:
+
+| Event | Purpose |
+|---|---|
+| `OnDelegationUpdate` | Task progress and optional authorization URL |
+| `OnApiEndpointResult` | Structured images/citations, separate from prose |
+| `OnModerationWarning` | Warning or termination; termination requires explicit reconnect |
+| `OnModerationFlag` | Redact the matching message’s historical UI/media by `MessageId` |
+| `OnServerError` | Machine `Code` and human `Message`, preserving existing `OnError` |
+
+All callbacks use the Unity main thread. URLs in results are data; your app chooses when
+to open authorization links and validates media URLs before fetching without credentials.
+The SDK stops matching audio and filters late redacted packets, but your app owns its UI
+history. `BasicChatDemo` demonstrates scoped text replacement.
+
+`OnBotSpeakingStateChanged` on the manager/character exposes LiveKit `estuary.state` and
+optional `estuary.message_id`. The low-level optional `ILiveKitBotStateSource` provides
+the current snapshot. Empty IDs are supported; these attributes are not a playback clock.
+
+WebSocket audio acknowledges a message after `BotVoice.IsFinal` and local rendering have
+finished. `OnMessagePlaybackComplete` identifies it. Raw PCM callers must explicitly call
+`audioSource.MarkAudioComplete(messageId)` after their last chunk.
 
 ## Character Simulation
 
